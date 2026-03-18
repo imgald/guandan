@@ -1,0 +1,10 @@
+﻿{
+  "name": "guandan",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test:rules": "node scripts/rule-regression.js",
+    "test:online-ui": "node scripts/online-ui-regression.js"
+  }
+}

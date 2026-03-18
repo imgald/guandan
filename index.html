@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>掼蛋</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app">
+    <div class="toast-layer" id="toast-layer" aria-live="polite"></div>
+
+    <div class="overlay hidden" id="round-result-overlay">
+      <div class="result-modal">
+        <div class="result-header">
+          <h2>本局结算</h2>
+          <button id="close-result-btn" type="button">下一局</button>
+        </div>
+        <div id="result-summary"></div>
+      </div>
+    </div>
+
+    <header class="topbar">
+      <div>
+        <h1>掼蛋</h1>
+        <p>本地与联网双模式</p>
+      </div>
+      <div class="controls" id="top-controls">
+        <button id="back-home-btn" class="hidden" type="button">返回首页</button>
+        <button id="info-toggle-btn" class="hidden" aria-expanded="false" aria-controls="info-panel">对局信息</button>
+        <button id="new-game-btn" class="hidden">开始新局</button>
+        <button id="sort-btn" class="hidden">整理手牌</button>
+      </div>
+    </header>
+
+    <section class="home-shell" id="home-shell">
+      <div class="home-hero">
+        <div>
+          <div class="home-kicker">GUANDAN</div>
+          <h2>选择你要进入的模式</h2>
+          <p>本地模式适合先体验规则和 AI，对战房间适合和朋友一起开局聊天。</p>
+        </div>
+      </div>
+      <div class="home-grid">
+        <button id="enter-local-btn" class="home-card" type="button">
+          <span class="home-card-tag">本地模式</span>
+          <strong>玩家 + 3 个 AI</strong>
+          <span>直接开始单机对局，适合测试规则、练牌和快速试玩。</span>
+        </button>
+        <button id="enter-online-btn" class="home-card" type="button">
+          <span class="home-card-tag">联网模式</span>
+          <strong>创建或加入房间</strong>
+          <span>支持房间码、房主开始、房间聊天、2 人补 AI 搭档和多人随机组队。</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="online-shell hidden" id="online-shell">
+      <div class="online-grid">
+        <section class="online-card online-entry">
+          <h2>联网大厅</h2>
+          <label class="field-label" for="online-name-input">你的昵称</label>
+          <input id="online-name-input" class="text-input" type="text" maxlength="20" placeholder="输入昵称" />
+          <div class="entry-actions">
+            <button id="create-room-btn" type="button">创建房间</button>
+          </div>
+          <div class="join-row">
+            <input id="join-room-input" class="text-input" type="text" maxlength="8" placeholder="输入房间码" />
+            <button id="join-room-btn" type="button">加入房间</button>
+          </div>
+          <div class="online-note">
+            当前版本已支持：创建房间、加入房间、房主开始、随机组队、2 人带 AI 搭档、房间聊天。
+          </div>
+          <div class="recent-room-box">
+            <div class="recent-room-head">
+              <h3>最近房间</h3>
+              <button id="clear-recent-rooms-btn" type="button">清空</button>
+            </div>
+            <div id="recent-room-list" class="recent-room-list"></div>
+          </div>
+        </section>
+
+        <section class="online-card online-room">
+          <div class="online-room-head">
+            <div>
+              <h2>房间信息</h2>
+              <div id="room-status-text" class="muted-text">还没有进入房间</div>
+            </div>
+            <div class="room-head-actions">
+              <button id="start-room-btn" type="button" disabled>房主开始</button>
+              <button id="leave-room-btn" type="button" disabled>离开房间</button>
+            </div>
+          </div>
+          <div class="room-code-row">
+            <div id="room-code-pill" class="room-code-pill hidden"></div>
+            <button id="copy-room-code-btn" class="hidden" type="button">复制房间码</button>
+          </div>
+          <div id="room-lobby-options" class="room-lobby-options hidden">
+            <label class="field-label" for="start-policy-select">开局策略</label>
+            <div class="lobby-option-row">
+              <select id="start-policy-select" class="text-input">
+                <option value="quick-2">2 人直接开</option>
+                <option value="wait-4">等满 4 人再开</option>
+              </select>
+              <div id="start-policy-hint" class="muted-text">2 名真人即可开始，2 人房会自动补 AI 搭档。</div>
+            </div>
+          </div>
+          <div id="room-player-list" class="room-player-list"></div>
+          <div id="room-setup-box" class="room-setup-box hidden"></div>
+        </section>
+
+        <section class="online-card online-chat hidden" id="online-chat-section">
+          <div class="online-room-head">
+            <div>
+              <h2>房间聊天</h2>
+              <div class="muted-text">进入房间后即可聊天</div>
+            </div>
+          </div>
+          <div id="chat-log" class="chat-log"></div>
+          <div class="chat-compose">
+            <input id="chat-input" class="text-input" type="text" maxlength="200" placeholder="输入聊天内容" />
+            <button id="send-chat-btn" type="button" disabled>发送</button>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <aside class="info-panel hidden" id="info-panel">
+      <div class="status-card">
+        <h2>当前状态</h2>
+        <div id="turn-indicator"></div>
+        <div id="round-summary"></div>
+      </div>
+      <div class="status-card">
+        <h2>规则说明</h2>
+        <div id="rules-content"></div>
+      </div>
+      <div class="log-card">
+        <h2>对局记录</h2>
+        <div id="log"></div>
+      </div>
+    </aside>
+
+    <main class="table hidden" id="local-table">
+      <section class="seat north" id="player-2-panel"></section>
+      <section class="seat west" id="player-1-panel"></section>
+      <section class="seat east" id="player-3-panel"></section>
+
+      <section class="center">
+        <div class="status-card">
+          <h2>当前牌桌</h2>
+          <div class="trump-banner" id="trump-banner"></div>
+          <div class="tribute-banner hidden" id="tribute-banner"></div>
+          <div id="trick-area"></div>
+        </div>
+      </section>
+
+      <section class="seat south" id="player-0-panel">
+        <div class="human-actions">
+          <button id="play-btn">出牌</button>
+          <button id="pass-btn">不要</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="./app.js"></script>
+  <script src="./online.js"></script>
+</body>
+</html>
