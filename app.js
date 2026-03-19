@@ -86,6 +86,7 @@ const els = {
   infoToggleBtn: document.getElementById("info-toggle-btn"),
   newGameBtn: document.getElementById("new-game-btn"),
   sortBtn: document.getElementById("sort-btn"),
+  localTable: document.getElementById("local-table"),
 };
 
 function buildDeck() {
@@ -208,6 +209,10 @@ function showErrorToast(message) {
   window.setTimeout(() => {
     toast.remove();
   }, 2800);
+}
+
+function isGameplayViewVisible() {
+  return Boolean(els.localTable && !els.localTable.classList.contains("hidden"));
 }
 
 function playUiPing() {
@@ -1438,6 +1443,10 @@ function maybeRunAiTurn() {
     return;
   }
 
+  if (!state.onlineMode && !isGameplayViewVisible()) {
+    return;
+  }
+
   const player = state.players[state.currentPlayer];
   if (player.isHuman || player.finished) {
     return;
@@ -1925,12 +1934,10 @@ function render() {
   const latest = state.trickHistory[0];
   if (latest && latest.token > state.lastAiFeedbackToken) {
     const actor = state.players[latest.playerId];
-    if (actor?.controlledByAi && !latest.reset) {
-      state.lastAiFeedbackToken = latest.token;
+    state.lastAiFeedbackToken = latest.token;
+    if (actor?.controlledByAi && !latest.reset && isGameplayViewVisible()) {
       showToast(`${actor.name}（AI）出了 ${comboToText(latest.combo)}`);
       playUiPing();
-    } else if (latest.token > state.lastAiFeedbackToken) {
-      state.lastAiFeedbackToken = latest.token;
     }
   }
   if (!state.onlineMode) {
