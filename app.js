@@ -2560,6 +2560,7 @@ startNewGame();
 state.onlineMode = false;
 state.localSeatId = 0;
 state.localPlayerOwnerId = null;
+const gameCore = window.GuandanGameCore;
 
 function getLocalSeatPlayer() {
   if (state.onlineMode && state.localSeatId < 0) {
@@ -2569,53 +2570,17 @@ function getLocalSeatPlayer() {
 }
 
 function exportOnlineSnapshot() {
-  const snapshot = {
-    players: state.players.map((player) => ({
-      id: player.id,
-      name: player.name,
-      role: player.role,
-      team: player.team,
-      ownerId: player.ownerId || null,
-      controlledByAi: Boolean(player.controlledByAi),
-      hand: player.hand.map((card) => ({ ...card })),
-      finished: Boolean(player.finished),
-      rank: player.rank,
-    })),
-    currentPlayer: state.currentPlayer,
-    levelRank: state.levelRank,
-    latestTrickToken: state.latestTrickToken,
-    roundNumber: state.roundNumber,
-    pendingTribute: state.pendingTribute,
-    currentTributeInfo: state.currentTributeInfo,
-    pendingRoundSetup: state.pendingRoundSetup,
-    matchScores: { ...state.matchScores },
-    roundResult: state.roundResult,
-    currentCombo: state.currentCombo,
-    lastPlayPlayer: state.lastPlayPlayer,
-    consecutivePasses: state.consecutivePasses,
-    logs: [...state.logs],
-    finishedOrder: [...state.finishedOrder],
-    winnerTeam: state.winnerTeam,
-    trickHistory: state.trickHistory.map((item) => ({
-      ...item,
-      combo: item.combo ? { ...item.combo, cards: item.combo.cards.map((card) => ({ ...card })) } : null,
-    })),
-    playHistory: state.playHistory.map((item) => ({ ...item, ranks: [...item.ranks] })),
-    passHistory: state.passHistory.map((item) => ({ ...item })),
-  };
+  const snapshot = gameCore.buildOnlineSnapshot(state);
 
   if (state.onlineMode) {
-    state.lastOnlineSnapshotSignature = buildOnlineSnapshotSignature(snapshot, state.localPlayerOwnerId);
+    state.lastOnlineSnapshotSignature = gameCore.buildOnlineSnapshotSignature(snapshot, state.localPlayerOwnerId);
   }
 
   return snapshot;
 }
 
 function buildOnlineSnapshotSignature(snapshot, localPlayerOwnerId) {
-  return JSON.stringify({
-    localPlayerOwnerId: localPlayerOwnerId || null,
-    snapshot,
-  });
+  return gameCore.buildOnlineSnapshotSignature(snapshot, localPlayerOwnerId);
 }
 
 function importOnlineSnapshot(snapshot, localPlayerOwnerId) {
@@ -2625,40 +2590,7 @@ function importOnlineSnapshot(snapshot, localPlayerOwnerId) {
   if (incomingSignature === state.lastOnlineSnapshotSignature) {
     return false;
   }
-  state.onlineMode = true;
-  state.localPlayerOwnerId = localPlayerOwnerId || null;
-  const previousSelectedIds = new Set(state.selectedIds);
-  state.players = snapshot.players.map((player) => ({
-    ...player,
-    isHuman: player.ownerId === localPlayerOwnerId,
-    hand: player.hand.map((card) => ({ ...card })),
-  }));
-  const localSeatIndex = state.players.findIndex((player) => player.ownerId === localPlayerOwnerId);
-  state.localSeatId = localSeatIndex >= 0 ? localSeatIndex : -1;
-  const localPlayer = state.players[state.localSeatId];
-  const availableIds = new Set((localPlayer?.hand || []).map((card) => card.id));
-  state.selectedIds = new Set([...previousSelectedIds].filter((id) => availableIds.has(id)));
-  state.currentPlayer = snapshot.currentPlayer;
-  state.levelRank = snapshot.levelRank;
-  state.latestTrickToken = snapshot.latestTrickToken;
-  state.roundNumber = snapshot.roundNumber;
-  state.pendingTribute = snapshot.pendingTribute;
-  state.currentTributeInfo = snapshot.currentTributeInfo;
-  state.pendingRoundSetup = snapshot.pendingRoundSetup;
-  state.matchScores = { ...snapshot.matchScores };
-  state.roundResult = snapshot.roundResult;
-  state.currentCombo = snapshot.currentCombo;
-  state.lastPlayPlayer = snapshot.lastPlayPlayer;
-  state.consecutivePasses = snapshot.consecutivePasses;
-  state.logs = [...snapshot.logs];
-  state.finishedOrder = [...snapshot.finishedOrder];
-  state.winnerTeam = snapshot.winnerTeam;
-  state.trickHistory = snapshot.trickHistory.map((item) => ({
-    ...item,
-    combo: item.combo ? { ...item.combo, cards: item.combo.cards.map((card) => ({ ...card })) } : null,
-  }));
-  state.playHistory = (snapshot.playHistory || []).map((item) => ({ ...item, ranks: [...(item.ranks || [])] }));
-  state.passHistory = (snapshot.passHistory || []).map((item) => ({ ...item }));
+  gameCore.importOnlineSnapshot(state, snapshot, localPlayerOwnerId);
   state.lastOnlineSnapshotSignature = incomingSignature;
   render();
   return true;
@@ -2667,57 +2599,14 @@ function importOnlineSnapshot(snapshot, localPlayerOwnerId) {
 function startOnlineRoundFromSetup(gameSetup, localPlayerOwnerId) {
   clearTimeout(state.aiTimer);
   state.aiTimer = null;
-  state.onlineMode = true;
-  state.localPlayerOwnerId = localPlayerOwnerId || null;
-  state.roundResult = null;
-  state.pendingTribute = null;
-  state.currentTributeInfo = null;
-  state.pendingRoundSetup = null;
-  state.levelRank = 3;
-  state.roundNumber = 1;
-  state.currentCombo = null;
-  state.lastPlayPlayer = null;
-  state.consecutivePasses = 0;
-  state.logs = [];
-  state.finishedOrder = [];
-  state.winnerTeam = null;
-  state.trickHistory = [];
-  state.playHistory = [];
-  state.passHistory = [];
-  state.latestTrickToken = 0;
-  state.selectedIds = new Set();
-  state.matchScores = {};
-  state.players = gameSetup.seats
-    .slice()
-    .sort((a, b) => a.seatId - b.seatId)
-    .map((seat) => ({
-      id: seat.seatId,
-      name: seat.name,
-      role: `Seat ${seat.seatId + 1}`,
-      team: seat.team,
-      ownerId: seat.playerId || null,
-      controlledByAi: !seat.isHuman,
-      isHuman: seat.playerId === localPlayerOwnerId,
-      hand: [],
-      finished: false,
-      rank: null,
-    }));
-  state.localSeatId = Math.max(0, state.players.findIndex((player) => player.ownerId === localPlayerOwnerId));
-  for (const player of state.players) {
-    state.matchScores[player.id] = 0;
-  }
-
-  const deck = shuffle(buildDeck());
-  for (let i = 0; i < deck.length; i += 1) {
-    state.players[i % 4].hand.push(deck[i]);
-  }
-  for (const player of state.players) {
-    player.hand = sortCards(player.hand);
-  }
-
-  state.currentPlayer = Math.floor(Math.random() * 4);
-  log(`${state.players[state.currentPlayer].name} 先手开始第 ${state.roundNumber} 局。`);
-  log(`本局主牌：${getLevelLabel(state.levelRank)}`);
+  gameCore.startOnlineRoundFromSetup(state, gameSetup, localPlayerOwnerId, {
+    shuffle,
+    buildDeck,
+    sortCards,
+    log,
+    getLevelLabel,
+    initializeScores,
+  });
   render();
   return exportOnlineSnapshot();
 }
@@ -2726,21 +2615,16 @@ function restartOnlineMatch() {
   if (!state.onlineMode) {
     return null;
   }
-  const gameSetup = {
-    seats: state.players
-      .slice()
-      .sort((a, b) => a.id - b.id)
-      .map((player) => ({
-        seatId: player.id,
-        name: player.name,
-        team: player.team,
-        teamLabel: player.team === 0 ? "你方" : "对方",
-        playerId: player.ownerId || null,
-        isHuman: Boolean(player.ownerId),
-      })),
-  };
-  initializeScores();
-  return startOnlineRoundFromSetup(gameSetup, state.localPlayerOwnerId);
+  gameCore.restartOnlineMatch(state, {
+    shuffle,
+    buildDeck,
+    sortCards,
+    log,
+    getLevelLabel,
+    initializeScores,
+  });
+  render();
+  return exportOnlineSnapshot();
 }
 
 function startNextOnlineRound() {
@@ -2752,48 +2636,18 @@ function startNextOnlineRound() {
   }
   clearTimeout(state.aiTimer);
   state.aiTimer = null;
-  state.roundResult = null;
   if (els.resultOverlay) {
     els.resultOverlay.classList.add("hidden");
   }
-
-  const nextSetup = state.pendingRoundSetup;
-  state.levelRank = nextSetup ? nextSetup.levelRank : state.levelRank;
-  state.roundNumber = nextSetup ? nextSetup.roundNumber : state.roundNumber + 1;
-  state.pendingTribute = nextSetup ? nextSetup.tributePlan : null;
-  state.currentCombo = null;
-  state.lastPlayPlayer = null;
-  state.consecutivePasses = 0;
-  state.logs = [];
-  state.finishedOrder = [];
-  state.winnerTeam = null;
-  state.trickHistory = [];
-  state.playHistory = [];
-  state.passHistory = [];
-  state.latestTrickToken = 0;
-  state.currentTributeInfo = null;
-  state.selectedIds = new Set();
-  state.pendingRoundSetup = null;
-
-  for (const player of state.players) {
-    player.hand = [];
-    player.finished = false;
-    player.rank = null;
-  }
-
-  const deck = shuffle(buildDeck());
-  for (let i = 0; i < deck.length; i += 1) {
-    state.players[i % 4].hand.push(deck[i]);
-  }
-  for (const player of state.players) {
-    player.hand = sortCards(player.hand);
-  }
-
-  applyTribute(state.pendingTribute);
-  state.pendingTribute = null;
-  state.currentPlayer = nextSetup ? nextSetup.startingPlayerId : Math.floor(Math.random() * 4);
-  log(`${state.players[state.currentPlayer].name} 先手开始第 ${state.roundNumber} 局。`);
-  log(`本局主牌：${getLevelLabel(state.levelRank)}`);
+  gameCore.startNextOnlineRound(state, {
+    shuffle,
+    buildDeck,
+    sortCards,
+    log,
+    getLevelLabel,
+    applyTribute,
+    initializeScores,
+  });
   render();
   return exportOnlineSnapshot();
 }

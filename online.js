@@ -1059,13 +1059,23 @@
   });
 
   els.enterOnlineBtn.addEventListener("click", async () => {
+    const persistedRoomId = localStorage.getItem(activeRoomKey);
+    const persistedPlayerId = localStorage.getItem(playerIdKey);
+    if (!state.roomId && persistedRoomId) {
+      state.roomId = persistedRoomId;
+    }
+    if (!state.playerId && persistedPlayerId) {
+      state.playerId = persistedPlayerId;
+    }
     if (state.roomId) {
-      setView(state.room?.status === "started" ? "online-game" : "online");
       try {
-        await refreshRoom();
+        await tryRestoreActiveRoom();
       } catch {}
-      startPolling();
-      setView(state.room?.status === "started" ? "online-game" : "online");
+      if (!state.roomId) {
+        setView("online");
+      } else {
+        setView(state.room?.status === "started" ? "online-game" : "online");
+      }
       return;
     }
     setView("online");

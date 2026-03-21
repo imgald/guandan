@@ -1,4 +1,4 @@
-const fs = require("fs");
+﻿const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
@@ -28,6 +28,7 @@ function createElementStub() {
 }
 
 function loadDebugApi() {
+  const gameCore = require(path.join(__dirname, '..', 'game-core.js'));
   const ids = new Map();
   const document = {
     getElementById(id) {
@@ -59,6 +60,7 @@ function loadDebugApi() {
       clearTimeout: () => {},
       alert() {},
       GuandanOnlineBridge: null,
+      GuandanGameCore: gameCore,
     },
     navigator: {
       clipboard: {
@@ -68,6 +70,7 @@ function loadDebugApi() {
   };
   sandbox.globalThis = sandbox;
   sandbox.window.document = document;
+  sandbox.GuandanGameCore = gameCore;
 
   const source = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   vm.runInNewContext(source, sandbox, { filename: "app.js" });
@@ -505,3 +508,4 @@ try {
   console.error(`rule-regression: failed - ${error.message}`);
   process.exitCode = 1;
 }
+

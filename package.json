@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
+    "test:game-core": "node scripts/game-core-regression.js",
     "test:rules": "node scripts/rule-regression.js",
     "test:online-ui": "node scripts/online-ui-regression.js",
     "test:online-stability": "node scripts/online-stability-regression.js"
