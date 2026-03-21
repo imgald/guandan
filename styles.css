@@ -582,6 +582,15 @@ button:disabled {
   margin-top: 14px;
 }
 
+.room-section + .room-section {
+  margin-top: 18px;
+}
+
+.room-section h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
 .room-player-item,
 .setup-row,
 .chat-line {
@@ -592,6 +601,30 @@ button:disabled {
   padding: 12px 14px;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.7);
+}
+
+.room-member-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.spectator-item {
+  background: rgba(47, 111, 88, 0.08);
+}
+
+.inline-danger-btn {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 0;
+  background: rgba(140, 65, 24, 0.14);
+  color: var(--accent-dark);
+  cursor: pointer;
+}
+
+.inline-danger-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .room-setup-box {

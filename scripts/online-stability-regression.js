@@ -1,4 +1,4 @@
-﻿const path = require("path");
+const path = require("path");
 
 function assert(condition, message) {
   if (!condition) {
@@ -65,6 +65,21 @@ async function main() {
       },
     });
     const guestPlayerId = joined.playerId;
+
+    await api(baseUrl, `/rooms/${roomId}/ready`, {
+      method: "POST",
+      body: {
+        playerId: hostPlayerId,
+        ready: true,
+      },
+    });
+    await api(baseUrl, `/rooms/${roomId}/ready`, {
+      method: "POST",
+      body: {
+        playerId: guestPlayerId,
+        ready: true,
+      },
+    });
 
     await api(baseUrl, `/rooms/${roomId}/start`, {
       method: "POST",

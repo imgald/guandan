@@ -86,11 +86,14 @@ function createRoom(name, playerId) {
       {
         id: playerId,
         name,
+        role: "player",
+        ready: false,
         status: "online",
         joinedAt: now,
         lastSeenAt: now,
       },
     ],
+    spectators: [],
     chat: [],
     closedNotice: null,
     systemEvents: [],
@@ -139,11 +142,29 @@ function ensurePlayer(room, playerId) {
   return player;
 }
 
+function findRoomMember(room, playerId) {
+  return room.players.find((item) => item.id === playerId)
+    || room.spectators.find((item) => item.id === playerId)
+    || null;
+}
+
+function ensureMember(room, playerId) {
+  const member = findRoomMember(room, playerId);
+  if (!member) {
+    const error = new Error("你不在这个房间里");
+    error.statusCode = 403;
+    throw error;
+  }
+  member.status = "online";
+  member.lastSeenAt = Date.now();
+  return member;
+}
+
 function touchPlayer(room, playerId) {
   if (!playerId) {
     return;
   }
-  const player = room.players.find((item) => item.id === playerId);
+  const player = findRoomMember(room, playerId);
   if (player) {
     const wasOffline = player.status === "offline";
     player.status = "online";
@@ -171,7 +192,7 @@ function reassignHostIfNeeded(room) {
 
 function refreshPresence(room) {
   const now = Date.now();
-  for (const player of room.players) {
+  for (const player of [...room.players, ...room.spectators]) {
     const nextStatus = player.lastSeenAt && now - player.lastSeenAt > offlineTimeoutMs ? "offline" : "online";
     if (player.status !== nextStatus) {
       player.status = nextStatus;
@@ -226,8 +247,18 @@ function snapshotRoom(room) {
     players: room.players.map((player) => ({
       id: player.id,
       name: player.name,
+      role: player.role || "player",
+      ready: Boolean(player.ready),
       status: player.status,
       joinedAt: player.joinedAt,
+    })),
+    spectators: room.spectators.map((spectator) => ({
+      id: spectator.id,
+      name: spectator.name,
+      role: spectator.role || "spectator",
+      ready: false,
+      status: spectator.status,
+      joinedAt: spectator.joinedAt,
     })),
     chat: room.chat.slice(-40),
     closedNotice: room.closedNotice || null,
@@ -336,29 +367,32 @@ async function handleApi(req, res, pathname) {
   const body = await readBody(req);
 
   if (req.method === "POST" && action === "join") {
-    if (room.status !== "lobby") {
-      sendJson(res, 400, { error: "房间已经开始，暂时不能加入" });
-      return;
-    }
     const playerId = body.playerId || createPlayerId();
-    let player = room.players.find((item) => item.id === playerId);
-    if (!player) {
-      if (room.players.length >= 4) {
-        sendJson(res, 400, { error: "房间已满" });
-        return;
-      }
-      player = {
+    const name = String(body.name || "玩家").slice(0, 20);
+    const asSpectator = Boolean(body.asSpectator)
+      || room.status === "started"
+      || room.players.length >= 4;
+    let member = findRoomMember(room, playerId);
+    if (!member) {
+      member = {
         id: playerId,
-        name: String(body.name || "玩家").slice(0, 20),
+        name,
+        role: asSpectator ? "spectator" : "player",
+        ready: false,
         status: "online",
         joinedAt: Date.now(),
         lastSeenAt: Date.now(),
       };
-      room.players.push(player);
+      if (member.role === "spectator") {
+        room.spectators.push(member);
+        addSystemEvent(room, "spectator-joined", `${member.name} 已进入房间观战。`);
+      } else {
+        room.players.push(member);
+      }
     } else {
-      player.name = String(body.name || player.name || "玩家").slice(0, 20);
-      player.status = "online";
-      player.lastSeenAt = Date.now();
+      member.name = name || member.name || "玩家";
+      member.status = "online";
+      member.lastSeenAt = Date.now();
     }
     room.updatedAt = Date.now();
     sendJson(res, 200, {
@@ -369,7 +403,18 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && action === "leave") {
-    const player = ensurePlayer(room, body.playerId);
+    const player = ensureMember(room, body.playerId);
+    if (player.role === "spectator") {
+      room.spectators = room.spectators.filter((item) => item.id !== player.id);
+      if (room.players.length === 0 && room.spectators.length === 0) {
+        rooms.delete(room.id);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+      room.updatedAt = Date.now();
+      sendJson(res, 200, { room: snapshotRoom(room) });
+      return;
+    }
     if (room.status === "started") {
       const leavingHost = room.hostId === player.id;
       room.players = room.players.filter((item) => item.id !== player.id);
@@ -398,10 +443,11 @@ async function handleApi(req, res, pathname) {
       return;
     }
     room.players = room.players.filter((item) => item.id !== player.id);
+    room.spectators = room.spectators.filter((item) => item.id !== player.id);
     if (room.hostId === player.id && room.players.length > 0) {
       room.hostId = room.players[0].id;
     }
-    if (room.players.length === 0) {
+    if (room.players.length === 0 && room.spectators.length === 0) {
       rooms.delete(room.id);
       sendJson(res, 200, { ok: true });
       return;
@@ -448,7 +494,7 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && action === "heartbeat") {
-    const player = ensurePlayer(room, body.playerId);
+    const player = ensureMember(room, body.playerId);
     player.status = "online";
     player.lastSeenAt = Date.now();
     refreshPresence(room);
@@ -468,6 +514,48 @@ async function handleApi(req, res, pathname) {
       return;
     }
     room.startPolicy = body.startPolicy === "wait-4" ? "wait-4" : "quick-2";
+    room.updatedAt = Date.now();
+    sendJson(res, 200, { room: snapshotRoom(room) });
+    return;
+  }
+
+  if (req.method === "POST" && action === "ready") {
+    const player = ensurePlayer(room, body.playerId);
+    if (room.status !== "lobby") {
+      sendJson(res, 400, { error: "牌局已经开始，不能再切换准备状态" });
+      return;
+    }
+    player.ready = body.ready !== false;
+    room.updatedAt = Date.now();
+    sendJson(res, 200, { room: snapshotRoom(room) });
+    return;
+  }
+
+  if (req.method === "POST" && action === "kick") {
+    const player = ensurePlayer(room, body.playerId);
+    if (player.id !== room.hostId) {
+      sendJson(res, 403, { error: "只有房主可以移出成员" });
+      return;
+    }
+    const targetId = String(body.targetId || "");
+    const target = findRoomMember(room, targetId);
+    if (!target) {
+      sendJson(res, 404, { error: "目标成员不存在" });
+      return;
+    }
+    if (target.id === room.hostId) {
+      sendJson(res, 400, { error: "不能移出房主自己" });
+      return;
+    }
+    if (target.role === "spectator") {
+      room.spectators = room.spectators.filter((item) => item.id !== target.id);
+    } else if (room.status === "started") {
+      sendJson(res, 400, { error: "牌局进行中暂不支持移出在场玩家" });
+      return;
+    } else {
+      room.players = room.players.filter((item) => item.id !== target.id);
+    }
+    addSystemEvent(room, "player-kicked", `${target.name} 已被房主移出房间。`);
     room.updatedAt = Date.now();
     sendJson(res, 200, { room: snapshotRoom(room) });
     return;
@@ -522,7 +610,7 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && action === "chat") {
-    const player = ensurePlayer(room, body.playerId);
+    const player = ensureMember(room, body.playerId);
     const text = String(body.text || "").trim().slice(0, 200);
     if (!text) {
       sendJson(res, 400, { error: "聊天内容不能为空" });

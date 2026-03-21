@@ -2562,7 +2562,10 @@ state.localSeatId = 0;
 state.localPlayerOwnerId = null;
 
 function getLocalSeatPlayer() {
-  return state.players[state.localSeatId] || state.players[0];
+  if (state.onlineMode && state.localSeatId < 0) {
+    return null;
+  }
+  return state.players[state.localSeatId] || state.players[0] || null;
 }
 
 function exportOnlineSnapshot() {
@@ -2630,7 +2633,8 @@ function importOnlineSnapshot(snapshot, localPlayerOwnerId) {
     isHuman: player.ownerId === localPlayerOwnerId,
     hand: player.hand.map((card) => ({ ...card })),
   }));
-  state.localSeatId = Math.max(0, state.players.findIndex((player) => player.ownerId === localPlayerOwnerId));
+  const localSeatIndex = state.players.findIndex((player) => player.ownerId === localPlayerOwnerId);
+  state.localSeatId = localSeatIndex >= 0 ? localSeatIndex : -1;
   const localPlayer = state.players[state.localSeatId];
   const availableIds = new Set((localPlayer?.hand || []).map((card) => card.id));
   state.selectedIds = new Set([...previousSelectedIds].filter((id) => availableIds.has(id)));
@@ -3309,7 +3313,7 @@ function renderSeat(player) {
     const minimumBtn = document.createElement("button");
     minimumBtn.type = "button";
     minimumBtn.id = "minimum-beat-btn";
-    minimumBtn.textContent = state.currentCombo ? "最小可压" : "最省出牌";
+    minimumBtn.textContent = "最小可压";
     minimumBtn.disabled = state.currentPlayer !== player.id || state.winnerTeam !== null || actionLocked || humanPlayableContext.beatingCombos.length === 0;
     minimumBtn.addEventListener("click", applyMinimumBeatSelection);
 

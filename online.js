@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   const apiBase = "/api";
   const recentRoomsKey = "guandan-online-recent-rooms";
   const activeRoomKey = "guandan-online-active-room";
@@ -27,7 +27,9 @@
     roomLobbyOptions: document.getElementById("room-lobby-options"),
     startPolicySelect: document.getElementById("start-policy-select"),
     startPolicyHint: document.getElementById("start-policy-hint"),
+    readyRoomBtn: document.getElementById("ready-room-btn"),
     roomPlayerList: document.getElementById("room-player-list"),
+    roomSpectatorList: document.getElementById("room-spectator-list"),
     roomSetupBox: document.getElementById("room-setup-box"),
     startRoomBtn: document.getElementById("start-room-btn"),
     leaveRoomBtn: document.getElementById("leave-room-btn"),
@@ -64,26 +66,32 @@
   };
 
   const STRINGS = {
-    noRoomYet: "还没有进入房间",
-    noRecentRooms: "还没有最近房间记录",
-    quickJoinHint: "点击即可快速填入并加入",
-    quickJoin: "快速加入",
-    host: "房主",
-    member: "房间成员",
-    online: "在线",
-    offline: "离线",
-    unknown: "未知",
-    waitingStart: "等待开始",
-    started: "房间已开始",
-    roomCode: "房间码",
-    startPolicyQuick: "当前策略：2 名真人即可开始，2 人房会自动补 AI 搭档。",
-    startPolicyWait: "当前策略：需要满 4 名真人玩家后才能开始。",
-    restoreStartDenied: "请等待房主开始下一局",
-    emptyChat: "进入房间后即可聊天。",
-    setupTitle: "本局座位与组队",
-    setupSummary: "房间已开始，下面展示本局座位分配和随机组队结果。",
-    startedSummary: (humanCount, hostName) => `房间已开始，当前共 ${humanCount} 名真人玩家，房主：${hostName}`,
-    lobbySummary: (humanCount, hostName) => `等待开始，当前共 ${humanCount} 名真人玩家，房主：${hostName}`,
+    noRoomYet: "\u8fd8\u6ca1\u6709\u8fdb\u5165\u623f\u95f4",
+    noRecentRooms: "\u8fd8\u6ca1\u6709\u6700\u8fd1\u623f\u95f4\u8bb0\u5f55",
+    quickJoinHint: "\u70b9\u51fb\u5373\u53ef\u5feb\u901f\u586b\u5165\u5e76\u52a0\u5165",
+    quickJoin: "\u5feb\u901f\u52a0\u5165",
+    host: "\u623f\u4e3b",
+    member: "\u724c\u5c40\u73a9\u5bb6",
+    spectator: "\u89c2\u6218\u8005",
+    online: "\u5728\u7ebf",
+    offline: "\u79bb\u7ebf",
+    ready: "\u5df2\u51c6\u5907",
+    notReady: "\u672a\u51c6\u5907",
+    unknown: "\u672a\u77e5",
+    roomCode: "\u623f\u95f4\u7801",
+    startPolicyQuick: "\u5f53\u524d\u7b56\u7565\uff1a2 \u540d\u771f\u4eba\u5373\u53ef\u5f00\u59cb\uff0c2 \u4eba\u623f\u4f1a\u81ea\u52a8\u8865 AI \u642d\u6863\u3002",
+    startPolicyWait: "\u5f53\u524d\u7b56\u7565\uff1a\u9700\u8981\u6ee1 4 \u540d\u771f\u4eba\u73a9\u5bb6\u540e\u624d\u80fd\u5f00\u59cb\u3002",
+    restoreStartDenied: "\u8bf7\u7b49\u5f85\u623f\u4e3b\u5f00\u59cb\u4e0b\u4e00\u5c40",
+    emptyChat: "\u8fdb\u5165\u724c\u5c40\u540e\u5373\u53ef\u968f\u65f6\u804a\u5929\u3002",
+    emptyPlayers: "\u6682\u65e0\u724c\u5c40\u73a9\u5bb6",
+    emptySpectators: "\u5f53\u524d\u6ca1\u6709\u89c2\u6218\u8005",
+    setupTitle: "\u672c\u5c40\u5ea7\u4f4d\u4e0e\u7ec4\u961f",
+    setupSummary: "\u623f\u95f4\u5df2\u5f00\u59cb\uff0c\u4e0b\u9762\u5c55\u793a\u672c\u5c40\u5ea7\u4f4d\u5206\u914d\u548c\u968f\u673a\u7ec4\u961f\u7ed3\u679c\u3002",
+    startedSummary: (humanCount, spectatorCount, hostName) => `\u623f\u95f4\u5df2\u5f00\u59cb\uff0c\u5f53\u524d ${humanCount} \u540d\u724c\u5c40\u73a9\u5bb6\u3001${spectatorCount} \u540d\u89c2\u6218\u8005\uff0c\u623f\u4e3b\uff1a${hostName}` ,
+    lobbySummary: (humanCount, spectatorCount, hostName) => `\u7b49\u5f85\u5f00\u59cb\uff0c\u5f53\u524d ${humanCount} \u540d\u724c\u5c40\u73a9\u5bb6\u3001${spectatorCount} \u540d\u89c2\u6218\u8005\uff0c\u623f\u4e3b\uff1a${hostName}` ,
+    spectatorJoined: "\u623f\u95f4\u5df2\u6ee1\uff0c\u5df2\u4f5c\u4e3a\u89c2\u6218\u8005\u52a0\u5165\u3002",
+    restoredRoom: "\u5df2\u6062\u590d\u5230\u8054\u673a\u623f\u95f4\u3002",
+    restoredGame: "\u5df2\u6062\u590d\u5230\u8054\u673a\u724c\u5c40\u3002",
   };
 
   window.GuandanOnlineBridge = {
@@ -268,7 +276,7 @@
     if (unseen.length > 0) {
       for (const event of unseen) {
         if (event.type === "host-changed" && room?.hostId === state.playerId) {
-          notify("你已成为新的房主。");
+          notify("\u4f60\u5df2\u6210\u4e3a\u65b0\u7684\u623f\u4e3b\u3002");
         } else {
           notify(event.text);
         }
@@ -288,7 +296,7 @@
     els.chatSection.classList.toggle("hidden", !showChat);
     els.chatSection.classList.toggle("chat-minimized", Boolean(showChat && state.chatMinimized));
     if (els.chatToggleBtn) {
-      els.chatToggleBtn.textContent = state.chatMinimized ? "展开" : "最小化";
+      els.chatToggleBtn.textContent = state.chatMinimized ? "\u5c55\u5f00" : "\u6700\u5c0f\u5316";
     }
     if (els.chatUnreadBadge) {
       els.chatUnreadBadge.textContent = String(state.unreadChatCount);
@@ -332,9 +340,9 @@
     if (!state.room || !els.chatInput) {
       return;
     }
-    const hostName = state.room.players.find((player) => player.id === state.room.hostId)?.name || "房主";
+    const hostName = state.room.players.find((player) => player.id === state.room.hostId)?.name || "\u623f\u4e3b";
     const prefix = els.chatInput.value && !els.chatInput.value.endsWith(" ") ? " " : "";
-    els.chatInput.value = `${els.chatInput.value || ""}${prefix}@房主(${hostName}) `;
+    els.chatInput.value = `${els.chatInput.value || ""}${prefix}@\u623f\u4e3b(${hostName}) `;
     els.chatInput.focus();
   }
 
@@ -352,7 +360,14 @@
         players: room.players.map((player) => ({
           id: player.id,
           name: player.name,
+          role: player.role,
+          ready: Boolean(player.ready),
           status: player.status,
+        })),
+        spectators: (room.spectators || []).map((spectator) => ({
+          id: spectator.id,
+          name: spectator.name,
+          status: spectator.status,
         })),
         chat: room.chat.map((message) => ({
           senderName: message.senderName,
@@ -423,7 +438,7 @@
 
   function normalizeNameForAction(mode) {
     const value = (els.onlineNameInput.value || "").trim();
-    const fallbackName = mode === "create" ? "老豺狗" : "豺狗妹";
+    const fallbackName = mode === "create" ? "\u8001\u8c7a\u72d7" : "\u8c7a\u72d7\u59b9";
     const name = value || fallbackName;
     els.onlineNameInput.value = name;
     state.playerName = name;
@@ -441,7 +456,7 @@
     });
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.error || "请求失败");
+      throw new Error(payload.error || "\u8bf7\u6c42\u5931\u8d25");
     }
     return payload;
   }
@@ -500,7 +515,7 @@
   async function joinRoom(roomCode) {
     const normalizedRoomCode = (roomCode || els.joinRoomInput.value || "").trim().toUpperCase();
     if (!normalizedRoomCode) {
-      notify("请输入房间码");
+      notify("\u8bf7\u8f93\u5165\u623f\u95f4\u7801");
       return;
     }
     const name = normalizeNameForAction("join");
@@ -516,6 +531,9 @@
     state.room = result.room;
     rememberRoom(result.room.id);
     els.joinRoomInput.value = result.room.id;
+    if ((result.room.spectators || []).some((spectator) => spectator.id === result.playerId)) {
+      notify(STRINGS.spectatorJoined);
+    }
     setView("online");
     renderRoom();
     startPolling();
@@ -527,7 +545,8 @@
     }
     try {
       const result = await api(`/rooms/${state.roomId}?playerId=${encodeURIComponent(state.playerId)}`);
-      const stillMember = result.room.players.some((player) => player.id === state.playerId);
+      const stillMember = result.room.players.some((player) => player.id === state.playerId)
+        || (result.room.spectators || []).some((spectator) => spectator.id === state.playerId);
       if (!stillMember) {
         clearActiveRoom();
         state.roomId = null;
@@ -537,11 +556,11 @@
       state.room = result.room;
       processSystemEvents(result.room, { silentInitial: true });
       if (result.room.status === "closed") {
-        resetRoomStateToHome(result.room.closedNotice || "当前牌局已结束。");
+        resetRoomStateToHome(result.room.closedNotice || "\u5f53\u524d\u724c\u5c40\u5df2\u7ed3\u675f\u3002");
         return;
       }
       setView(result.room.status === "started" ? "online-game" : "online");
-      notify(result.room.status === "started" ? "\u5df2\u6062\u590d\u5230\u8054\u673a\u724c\u5c40\u3002" : "\u5df2\u6062\u590d\u5230\u8054\u673a\u623f\u95f4\u3002");
+      notify(result.room.status === "started" ? STRINGS.restoredGame : STRINGS.restoredRoom);
       startPolling();
       await maybeSyncOnlineGame();
       renderRoom();
@@ -560,7 +579,7 @@
     state.room = result.room;
     processSystemEvents(result.room);
     if (result.room.status === "closed") {
-      resetRoomStateToHome(result.room.closedNotice || "当前牌局已结束。");
+      resetRoomStateToHome(result.room.closedNotice || "\u5f53\u524d\u724c\u5c40\u5df2\u7ed3\u675f\u3002");
       return;
     }
     await maybeSyncOnlineGame();
@@ -596,6 +615,42 @@
       body: {
         playerId: state.playerId,
         startPolicy: els.startPolicySelect.value,
+      },
+    });
+    state.room = result.room;
+    processSystemEvents(result.room);
+    renderRoom();
+  }
+
+  async function toggleReady() {
+    if (!state.roomId || !state.playerId || !state.room) {
+      return;
+    }
+    const me = state.room.players.find((player) => player.id === state.playerId);
+    if (!me || state.room.status !== "lobby") {
+      return;
+    }
+    const result = await api(`/rooms/${state.roomId}/ready`, {
+      method: "POST",
+      body: {
+        playerId: state.playerId,
+        ready: !me.ready,
+      },
+    });
+    state.room = result.room;
+    processSystemEvents(result.room);
+    renderRoom();
+  }
+
+  async function kickMember(targetId) {
+    if (!state.roomId || !state.playerId || !targetId) {
+      return;
+    }
+    const result = await api(`/rooms/${state.roomId}/kick`, {
+      method: "POST",
+      body: {
+        playerId: state.playerId,
+        targetId,
       },
     });
     state.room = result.room;
@@ -746,21 +801,77 @@
 
   function renderPlayers(room) {
     els.roomPlayerList.innerHTML = "";
+    els.roomSpectatorList.innerHTML = "";
     if (!room) {
       return;
     }
+    if (!room.players.length) {
+      const emptyPlayers = document.createElement("div");
+      emptyPlayers.className = "muted-text";
+      emptyPlayers.textContent = STRINGS.emptyPlayers;
+      els.roomPlayerList.appendChild(emptyPlayers);
+    }
+    const isHost = room.hostId === state.playerId;
     for (const player of room.players) {
       const item = document.createElement("div");
       item.className = "room-player-item";
       const isMe = player.id === state.playerId;
+      const roleLabel = player.id === room.hostId ? STRINGS.host : STRINGS.member;
       item.innerHTML = `
         <div>
           <strong>${escapeHtml(player.name)}${isMe ? "（你）" : ""}</strong>
-          <div class="muted-text">${player.id === room.hostId ? STRINGS.host : STRINGS.member}</div>
+          <div class="muted-text">${roleLabel} · ${player.ready ? STRINGS.ready : STRINGS.notReady}</div>
         </div>
-        <div class="muted-text">${player.status === "online" ? STRINGS.online : STRINGS.offline}</div>
+        <div class="room-member-side">
+          <div class="muted-text">${player.status === "online" ? STRINGS.online : STRINGS.offline}</div>
+        </div>
       `;
+      if (isHost && !isMe) {
+        const kickBtn = document.createElement("button");
+        kickBtn.type = "button";
+        kickBtn.className = "inline-danger-btn";
+        kickBtn.textContent = "移出";
+        kickBtn.disabled = state.actionPending || state.syncingGame || room.status === "started";
+        kickBtn.addEventListener("click", () => {
+          kickMember(player.id).catch((error) => notify(error.message));
+        });
+        item.querySelector(".room-member-side")?.appendChild(kickBtn);
+      }
       els.roomPlayerList.appendChild(item);
+    }
+    const spectators = room.spectators || [];
+    if (!spectators.length) {
+      const emptySpectators = document.createElement("div");
+      emptySpectators.className = "muted-text";
+      emptySpectators.textContent = STRINGS.emptySpectators;
+      els.roomSpectatorList.appendChild(emptySpectators);
+      return;
+    }
+    for (const spectator of spectators) {
+      const item = document.createElement("div");
+      item.className = "room-player-item spectator-item";
+      const isMe = spectator.id === state.playerId;
+      item.innerHTML = `
+        <div>
+          <strong>${escapeHtml(spectator.name)}${isMe ? "（你）" : ""}</strong>
+          <div class="muted-text">${STRINGS.spectator}</div>
+        </div>
+        <div class="room-member-side">
+          <div class="muted-text">${spectator.status === "online" ? STRINGS.online : STRINGS.offline}</div>
+        </div>
+      `;
+      if (isHost && !isMe) {
+        const kickBtn = document.createElement("button");
+        kickBtn.type = "button";
+        kickBtn.className = "inline-danger-btn";
+        kickBtn.textContent = "移出";
+        kickBtn.disabled = state.actionPending || state.syncingGame;
+        kickBtn.addEventListener("click", () => {
+          kickMember(spectator.id).catch((error) => notify(error.message));
+        });
+        item.querySelector(".room-member-side")?.appendChild(kickBtn);
+      }
+      els.roomSpectatorList.appendChild(item);
     }
   }
 
@@ -770,7 +881,6 @@
       els.roomSetupBox.innerHTML = "";
       return;
     }
-
     const teamGroups = (room.gameSetup.teamGroups || [])
       .map((group) => `
         <div class="team-group">
@@ -779,7 +889,6 @@
         </div>
       `)
       .join("");
-
     const seats = room.gameSetup.seats
       .map((seat) => `
         <div class="setup-row">
@@ -788,7 +897,6 @@
         </div>
       `)
       .join("");
-
     els.roomSetupBox.classList.remove("hidden");
     els.roomSetupBox.innerHTML = `
       <h3>${STRINGS.setupTitle}</h3>
@@ -885,7 +993,16 @@
     state.lastRoomRenderSignature = renderSignature;
 
     const interactionLocked = state.actionPending || state.syncingGame;
-    els.startRoomBtn.disabled = !joined || interactionLocked;
+    const localPlayer = room?.players?.find((player) => player.id === state.playerId) || null;
+    const localSpectator = room?.spectators?.find((spectator) => spectator.id === state.playerId) || null;
+    const isHost = Boolean(room && room.hostId === state.playerId);
+    const playerCount = room?.players?.length || 0;
+    const spectatorCount = room?.spectators?.length || 0;
+    const startPolicy = room?.startPolicy || "quick-2";
+    const canStart = Boolean(isHost && room?.status === "lobby" && (startPolicy === "wait-4" ? playerCount >= 4 : playerCount >= 2));
+
+    els.startRoomBtn.disabled = !joined || !canStart || interactionLocked;
+    els.readyRoomBtn.disabled = !localPlayer || room?.status !== "lobby" || interactionLocked;
     els.leaveRoomBtn.disabled = !joined || interactionLocked;
     els.sendChatBtn.disabled = !joined || state.actionPending;
     if (els.mentionHostBtn) {
@@ -901,7 +1018,9 @@
       els.startPolicySelect.value = "quick-2";
       els.startPolicySelect.disabled = true;
       els.startPolicyHint.textContent = STRINGS.startPolicyQuick;
+      els.readyRoomBtn.textContent = "\u51c6\u5907";
       els.roomPlayerList.innerHTML = "";
+      els.roomSpectatorList.innerHTML = "";
       els.roomSetupBox.classList.add("hidden");
       els.roomSetupBox.innerHTML = "";
       els.chatLog.innerHTML = "";
@@ -910,22 +1029,21 @@
       return;
     }
 
-    const isHost = room.hostId === state.playerId;
-    const humanCount = room.players.length;
-    const startPolicy = room.startPolicy || "quick-2";
-    const canStart = isHost && room.status === "lobby" && (startPolicy === "wait-4" ? humanCount >= 4 : humanCount >= 2);
     const hostName = room.players.find((player) => player.id === room.hostId)?.name || STRINGS.unknown;
-
     els.startPolicySelect.value = startPolicy;
     els.startPolicySelect.disabled = !isHost || room.status !== "lobby";
     els.startPolicyHint.textContent = startPolicy === "wait-4" ? STRINGS.startPolicyWait : STRINGS.startPolicyQuick;
+    els.readyRoomBtn.textContent = localPlayer?.ready ? "\u53d6\u6d88\u51c6\u5907" : (localPlayer ? "\u51c6\u5907" : "\u89c2\u6218\u4e2d");
 
-    els.roomStatusText.textContent = room.status === "started"
-      ? STRINGS.startedSummary(humanCount, hostName)
-      : STRINGS.lobbySummary(humanCount, hostName);
+    let statusText = room.status === "started"
+      ? STRINGS.startedSummary(playerCount, spectatorCount, hostName)
+      : STRINGS.lobbySummary(playerCount, spectatorCount, hostName);
+    if (localSpectator) {
+      statusText += " \u00b7 \u4f60\u5f53\u524d\u6b63\u5728\u89c2\u6218";
+    }
+    els.roomStatusText.textContent = statusText;
     els.roomCodePill.classList.remove("hidden");
     els.roomCodePill.textContent = `${STRINGS.roomCode} ${room.id}`;
-    els.startRoomBtn.disabled = !canStart || interactionLocked;
     els.restartMatchBtn.classList.toggle("hidden", !(room.status === "started" && isHost && state.view === "online-game"));
 
     renderPlayers(room);
@@ -934,19 +1052,20 @@
     updateChatChrome(room);
   }
 
+
   els.enterLocalBtn.addEventListener("click", () => {
     setView("local");
     window.GuandanApp?.startLocalGame?.();
   });
 
-  els.enterOnlineBtn.addEventListener("click", () => {
+  els.enterOnlineBtn.addEventListener("click", async () => {
     if (state.roomId) {
-      refreshRoom()
-        .catch(() => {})
-        .finally(() => {
-          startPolling();
-          setView(state.room?.status === "started" ? "online-game" : "online");
-        });
+      setView(state.room?.status === "started" ? "online-game" : "online");
+      try {
+        await refreshRoom();
+      } catch {}
+      startPolling();
+      setView(state.room?.status === "started" ? "online-game" : "online");
       return;
     }
     setView("online");
@@ -973,6 +1092,10 @@
 
   els.startRoomBtn.addEventListener("click", () => {
     startRoom().catch((error) => notify(error.message));
+  });
+
+  els.readyRoomBtn.addEventListener("click", () => {
+    toggleReady().catch((error) => notify(error.message));
   });
 
   els.leaveRoomBtn.addEventListener("click", () => {
@@ -1018,3 +1141,4 @@
   renderRoom();
   tryRestoreActiveRoom();
 })();
+
