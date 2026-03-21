@@ -59,6 +59,8 @@ const state = {
   finishedOrder: [],
   winnerTeam: null,
   trickHistory: [],
+  playHistory: [],
+  passHistory: [],
   aiTimer: null,
   onlineMode: false,
   localPlayerOwnerId: null,
@@ -300,6 +302,14 @@ function getRankPower(rank) {
     return 13;
   }
   return rank;
+}
+
+function compareRanksForPressure(rankA, rankB) {
+  const powerDiff = getRankPower(rankA) - getRankPower(rankB);
+  if (powerDiff !== 0) {
+    return powerDiff;
+  }
+  return rankA - rankB;
 }
 
 function splitWildcards(cards) {
@@ -548,6 +558,42 @@ function comboToText(combo) {
     return "无";
   }
   return `${TYPE_LABELS[combo.type] || combo.type} ${cardsToText(combo.cards)}`;
+}
+
+function getComboMemoryKey(comboLike) {
+  if (!comboLike) {
+    return "";
+  }
+  return `${comboLike.type}-${comboLike.length}`;
+}
+
+function rememberPlay(player, combo) {
+  if (!player || !combo) {
+    return;
+  }
+  state.playHistory.unshift({
+    playerId: player.id,
+    type: combo.type,
+    length: combo.length,
+    compareRank: combo.compareRank,
+    ranks: combo.cards.map((card) => card.rank),
+    token: state.latestTrickToken,
+  });
+  state.playHistory = state.playHistory.slice(0, 60);
+}
+
+function rememberPass(player, combo) {
+  if (!player || !combo) {
+    return;
+  }
+  state.passHistory.unshift({
+    playerId: player.id,
+    type: combo.type,
+    length: combo.length,
+    compareRank: combo.compareRank,
+    token: state.latestTrickToken,
+  });
+  state.passHistory = state.passHistory.slice(0, 60);
 }
 
 function describeBeatRequirement(currentCombo) {
@@ -838,6 +884,7 @@ function applyPlay(player, combo) {
   state.lastPlayPlayer = player.id;
   state.consecutivePasses = 0;
   state.latestTrickToken += 1;
+  rememberPlay(player, combo);
   state.trickHistory.unshift({
     playerId: player.id,
     combo,
@@ -850,6 +897,7 @@ function applyPlay(player, combo) {
 
 function applyPass(player) {
   state.consecutivePasses += 1;
+  rememberPass(player, state.currentCombo);
   log(`${player.name} passed`);
 }
 
@@ -1126,9 +1174,37 @@ function pickPreferredSingle(combos, hand) {
   return singletonSingles[0] || singles[0];
 }
 
-function estimateTurnsToEmpty(hand, memo = new Map()) {
+function compareEndgamePlans(a, b) {
+  if (!a) {
+    return 1;
+  }
+  if (!b) {
+    return -1;
+  }
+  if (a.turns !== b.turns) {
+    return a.turns - b.turns;
+  }
+  if (a.bombCount !== b.bombCount) {
+    return a.bombCount - b.bombCount;
+  }
+  if (a.breakPenalty !== b.breakPenalty) {
+    return a.breakPenalty - b.breakPenalty;
+  }
+  if (a.openingStrength !== b.openingStrength) {
+    return a.openingStrength - b.openingStrength;
+  }
+  return a.sequence.length - b.sequence.length;
+}
+
+function buildEndgamePlan(hand, memo = new Map()) {
   if (!hand || hand.length === 0) {
-    return 0;
+    return {
+      turns: 0,
+      bombCount: 0,
+      breakPenalty: 0,
+      openingStrength: 0,
+      sequence: [],
+    };
   }
 
   const key = hand.map((card) => card.id).sort().join(",");
@@ -1141,27 +1217,44 @@ function estimateTurnsToEmpty(hand, memo = new Map()) {
     const preferred = combos.filter((combo) => combo.type !== "bomb" && combo.type !== "jokerBomb");
     const source = preferred.length > 0 ? preferred : combos;
     const bestLength = source.reduce((max, combo) => Math.max(max, combo.cards.length), 1);
-    const estimate = Math.ceil(hand.length / Math.max(1, bestLength));
-    memo.set(key, estimate);
-    return estimate;
+    const fallback = {
+      turns: Math.ceil(hand.length / Math.max(1, bestLength)),
+      bombCount: 0,
+      breakPenalty: 0,
+      openingStrength: source[0] ? getComboStrengthScore(source[0]) : 0,
+      sequence: source[0] ? [source[0]] : [],
+    };
+    memo.set(key, fallback);
+    return fallback;
   }
 
-  let best = hand.length;
   const combos = allPossibleCombos(hand);
+  let bestPlan = null;
   for (const combo of combos) {
     const ids = new Set(combo.cards.map((card) => card.id));
     const remaining = hand.filter((card) => !ids.has(card.id));
-    const turns = 1 + estimateTurnsToEmpty(remaining, memo);
-    if (turns < best) {
-      best = turns;
+    const nextPlan = buildEndgamePlan(remaining, memo);
+    const candidatePlan = {
+      turns: 1 + nextPlan.turns,
+      bombCount: (combo.type === "bomb" || combo.type === "jokerBomb" ? 1 : 0) + nextPlan.bombCount,
+      breakPenalty: getComboBreakPenalty(combo, hand, combos) + nextPlan.breakPenalty,
+      openingStrength: getComboStrengthScore(combo),
+      sequence: [combo, ...nextPlan.sequence],
+    };
+    if (!bestPlan || compareEndgamePlans(candidatePlan, bestPlan) < 0) {
+      bestPlan = candidatePlan;
     }
-    if (best === 1) {
+    if (bestPlan?.turns === 1) {
       break;
     }
   }
 
-  memo.set(key, best);
-  return best;
+  memo.set(key, bestPlan);
+  return bestPlan;
+}
+
+function estimateTurnsToEmpty(hand, memo = new Map()) {
+  return buildEndgamePlan(hand, memo).turns;
 }
 
 function estimateTurnsAfterCombo(player, combo) {
@@ -1170,14 +1263,270 @@ function estimateTurnsAfterCombo(player, combo) {
   }
   const ids = new Set(combo.cards.map((card) => card.id));
   const remaining = player.hand.filter((card) => !ids.has(card.id));
-  return estimateTurnsToEmpty(remaining);
+  return buildEndgamePlan(remaining).turns;
 }
 
 function estimateTurnsForPlayer(player) {
   if (!player) {
     return Number.MAX_SAFE_INTEGER;
   }
-  return estimateTurnsToEmpty(player.hand);
+  return buildEndgamePlan(player.hand).turns;
+}
+
+function getDangerousOpponentInfo(player, nextPlayer = getNextUnfinishedPlayer(player.id)) {
+  const opponentInfos = getOpponents(player)
+    .filter((opponent) => opponent.hand.length <= 8)
+    .map((opponent) => ({
+      player: opponent,
+      turns: estimateTurnsForPlayer(opponent),
+      handSize: opponent.hand.length,
+      isNext: Boolean(nextPlayer && nextPlayer.id === opponent.id),
+    }));
+
+  if (opponentInfos.length === 0) {
+    return null;
+  }
+
+  opponentInfos.sort((a, b) => {
+    if (a.turns !== b.turns) {
+      return a.turns - b.turns;
+    }
+    if (a.isNext !== b.isNext) {
+      return a.isNext ? -1 : 1;
+    }
+    if (a.handSize !== b.handSize) {
+      return a.handSize - b.handSize;
+    }
+    return a.player.id - b.player.id;
+  });
+
+  return opponentInfos[0];
+}
+
+function getRankDeckCapacity(rank) {
+  if (rank === 16 || rank === 17) {
+    return 2;
+  }
+  return 8;
+}
+
+function getVisibleRemainingCounts(observerPlayer) {
+  const counts = new Map();
+  for (let rank = 3; rank <= 17; rank += 1) {
+    counts.set(rank, getRankDeckCapacity(rank));
+  }
+
+  for (const entry of state.playHistory) {
+    for (const rank of entry.ranks || []) {
+      counts.set(rank, Math.max(0, (counts.get(rank) || 0) - 1));
+    }
+  }
+
+  for (const card of observerPlayer?.hand || []) {
+    counts.set(card.rank, Math.max(0, (counts.get(card.rank) || 0) - 1));
+  }
+
+  return counts;
+}
+
+function getVisibleRankUpperBounds(observerPlayer) {
+  const visibleCounts = getVisibleRemainingCounts(observerPlayer);
+  let singleMax = 2;
+  let pairMax = 2;
+  let tripleMax = 2;
+
+  for (let rank = 17; rank >= 3; rank -= 1) {
+    const remaining = visibleCounts.get(rank) || 0;
+    if (singleMax === 2 && remaining >= 1) {
+      singleMax = rank;
+    }
+    if (pairMax === 2 && remaining >= 2) {
+      pairMax = rank;
+    }
+    if (tripleMax === 2 && remaining >= 3) {
+      tripleMax = rank;
+    }
+  }
+
+  return {
+    singleMax,
+    pairMax,
+    tripleMax,
+    visibleCounts,
+  };
+}
+
+function getPlayerMemoryProfile(observerPlayer, targetPlayer) {
+  if (!observerPlayer || !targetPlayer) {
+    return null;
+  }
+
+  const recentPlays = state.playHistory.filter((entry) => entry.playerId === targetPlayer.id).slice(0, 8);
+  const recentPasses = state.passHistory.filter((entry) => entry.playerId === targetPlayer.id).slice(0, 8);
+  const typeCounts = new Map();
+  const passHints = new Map();
+  const upperBounds = getVisibleRankUpperBounds(observerPlayer);
+
+  for (const entry of recentPlays) {
+    typeCounts.set(entry.type, (typeCounts.get(entry.type) || 0) + 1);
+  }
+
+  for (const entry of recentPasses) {
+    const key = getComboMemoryKey(entry);
+    const previous = passHints.get(key);
+    if (!previous || getRankPower(entry.compareRank) > getRankPower(previous.compareRank)) {
+      passHints.set(key, entry);
+    }
+  }
+
+  const dominantType = [...typeCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+  const structuredTypes = new Set(["straight", "doubleStraight", "plane", "triplePair"]);
+  const structuredCount = recentPlays.filter((entry) => structuredTypes.has(entry.type)).length;
+  const simpleCount = recentPlays.filter((entry) => !structuredTypes.has(entry.type)).length;
+
+  let likelyFinishType = dominantType;
+  if (structuredCount >= 2 && structuredCount >= simpleCount) {
+    likelyFinishType = "structured";
+  } else if (targetPlayer.hand.length <= 2 && passHints.has("pair-2")) {
+    likelyFinishType = "single";
+  } else if (targetPlayer.hand.length <= 3 && dominantType === "pair") {
+    likelyFinishType = "pair";
+  } else if (targetPlayer.hand.length <= 3 && dominantType === "triple") {
+    likelyFinishType = "triple";
+  }
+
+  for (const entry of recentPasses) {
+    if (entry.type === "single") {
+      upperBounds.singleMax = Math.min(upperBounds.singleMax, entry.compareRank - 1);
+    }
+    if (entry.type === "pair") {
+      upperBounds.pairMax = Math.min(upperBounds.pairMax, entry.compareRank - 1);
+    }
+    if (entry.type === "triple") {
+      upperBounds.tripleMax = Math.min(upperBounds.tripleMax, entry.compareRank - 1);
+    }
+  }
+
+  return {
+    dominantType,
+    likelyFinishType,
+    passHints,
+    structuredCount,
+    simpleCount,
+    upperBounds,
+  };
+}
+
+function shouldDefendAgainstOpponent(dangerInfo) {
+  if (!dangerInfo) {
+    return false;
+  }
+  if (dangerInfo.turns <= 1) {
+    return true;
+  }
+  if (dangerInfo.isNext && dangerInfo.turns <= 2) {
+    return true;
+  }
+  return dangerInfo.handSize <= 4;
+}
+
+function getMemoryPressureScore(combo, profile) {
+  if (!combo || !profile) {
+    return 0;
+  }
+
+  let score = 0;
+  const passHint = profile.passHints.get(getComboMemoryKey(combo));
+  if (passHint && compareRanksForPressure(combo.compareRank, passHint.compareRank) >= 0) {
+    score += 220 + compareRanksForPressure(combo.compareRank, passHint.compareRank) * 8;
+  }
+
+  if (combo.type === "single" && compareRanksForPressure(combo.compareRank, profile.upperBounds.singleMax) > 0) {
+    score += 180;
+  }
+  if (combo.type === "pair" && compareRanksForPressure(combo.compareRank, profile.upperBounds.pairMax) > 0) {
+    score += 220;
+  }
+  if (combo.type === "triple" && compareRanksForPressure(combo.compareRank, profile.upperBounds.tripleMax) > 0) {
+    score += 200;
+  }
+
+  const visibleCount = profile.upperBounds.visibleCounts.get(combo.compareRank) || 0;
+  if ((combo.type === "single" && visibleCount <= 1) || (combo.type === "pair" && visibleCount <= 2)) {
+    score += 25;
+  }
+
+  if (profile.likelyFinishType === "structured") {
+    if (combo.type === "straight" || combo.type === "doubleStraight" || combo.type === "plane" || combo.type === "triplePair") {
+      score += 70;
+    }
+    if (combo.type === "single") {
+      score -= 40;
+    }
+  } else if (profile.likelyFinishType === "single") {
+    if (combo.type !== "single") {
+      score += 50;
+    }
+  } else if (profile.likelyFinishType === "pair") {
+    if (combo.type === "pair" || combo.type === "doubleStraight") {
+      score += 55;
+    }
+  } else if (profile.likelyFinishType && combo.type === profile.likelyFinishType) {
+    score += 45;
+  }
+
+  return score;
+}
+
+function sortByMemoryPressure(candidates, player, allCombos, targetPlayer, preferPressure = true) {
+  const profile = getPlayerMemoryProfile(player, targetPlayer);
+  if (!profile) {
+    return preferPressure
+      ? sortByPressure(candidates, player.hand, allCombos)
+      : sortByConservativeUse(candidates, player.hand, allCombos);
+  }
+
+  const fallback = preferPressure
+    ? sortByPressure(candidates, player.hand, allCombos)
+    : sortByConservativeUse(candidates, player.hand, allCombos);
+  const fallbackIndex = new Map(fallback.map((combo, index) => [combo.cards.map((card) => card.id).join(","), index]));
+
+  return [...candidates].sort((a, b) => {
+    const scoreDiff = getMemoryPressureScore(b, profile) - getMemoryPressureScore(a, profile);
+    if (scoreDiff !== 0) {
+      return scoreDiff;
+    }
+
+    const aKey = a.cards.map((card) => card.id).join(",");
+    const bKey = b.cards.map((card) => card.id).join(",");
+    return (fallbackIndex.get(aKey) || 0) - (fallbackIndex.get(bKey) || 0);
+  });
+}
+
+function getEndgameFirstCombo(player, candidates) {
+  if (!player || !candidates || candidates.length === 0 || player.hand.length > 8) {
+    return null;
+  }
+
+  let bestCombo = null;
+  let bestPlan = null;
+  for (const combo of candidates) {
+    const ids = new Set(combo.cards.map((card) => card.id));
+    const remaining = player.hand.filter((card) => !ids.has(card.id));
+    const nextPlan = buildEndgamePlan(remaining);
+    const candidatePlan = {
+      turns: 1 + nextPlan.turns,
+      bombCount: (combo.type === "bomb" || combo.type === "jokerBomb" ? 1 : 0) + nextPlan.bombCount,
+      breakPenalty: nextPlan.breakPenalty,
+      openingStrength: getComboStrengthScore(combo),
+      sequence: [combo, ...nextPlan.sequence],
+    };
+    if (!bestPlan || compareEndgamePlans(candidatePlan, bestPlan) < 0) {
+      bestPlan = candidatePlan;
+      bestCombo = combo;
+    }
+  }
+  return bestCombo;
 }
 
 function sortByEndgamePlan(candidates, player, allCombos, preferPressure = false) {
@@ -1212,7 +1561,7 @@ function findExactFinishCombo(candidates, player, allCombos) {
   return sortByEndgamePlan(finishing, player, allCombos, true)[0] || null;
 }
 
-function chooseBombResponse(player, bombs, nonBombs, allCombos, urgentOpponent, urgentTeammate, teammate) {
+function chooseBombResponse(player, bombs, nonBombs, allCombos, urgentOpponent, urgentTeammate, teammate, dangerInfo = null) {
   if (bombs.length === 0) {
     return null;
   }
@@ -1232,6 +1581,7 @@ function chooseBombResponse(player, bombs, nonBombs, allCombos, urgentOpponent, 
   const dangerousOpponent = getOpponents(player).some((opponent) => opponent.hand.length <= 2);
   const teammateCritical = Boolean(teammate && !teammate.finished && teammate.hand.length <= 2);
   const endgame = player.hand.length <= 6;
+  const defensiveThreat = shouldDefendAgainstOpponent(dangerInfo);
 
   if (twoHumanMode) {
     if (nonBombs.length > 0) {
@@ -1243,12 +1593,18 @@ function chooseBombResponse(player, bombs, nonBombs, allCombos, urgentOpponent, 
     if (dangerousOpponent) {
       return turnsAfterBomb <= 2 ? bestBomb : null;
     }
+    if (defensiveThreat && dangerInfo?.isNext) {
+      return turnsAfterBomb <= Math.max(1, dangerInfo.turns) ? bestBomb : null;
+    }
     if (urgentOpponent || endgame) {
       return turnsAfterBomb <= 1 ? bestBomb : null;
     }
     return null;
   }
 
+  if (defensiveThreat && dangerInfo?.isNext) {
+    return turnsAfterBomb <= Math.max(1, dangerInfo.turns) ? bestBomb : null;
+  }
   if (urgentOpponent || endgame) {
     return bestBomb;
   }
@@ -1283,7 +1639,60 @@ function chooseProtectiveBeat(player, candidates, allCombos, preferPressure = fa
   return sorter(source, player.hand, allCombos)[0] || null;
 }
 
-function chooseLeadCombo(player, combos, urgentOpponent, urgentTeammate, nextPlayer) {
+function chooseDefensiveLead(player, combos, dangerInfo) {
+  const nonBombs = combos.filter((combo) => combo.type !== "bomb" && combo.type !== "jokerBomb");
+  if (nonBombs.length === 0) {
+    return null;
+  }
+
+  const pressureChoices = sortByMemoryPressure(nonBombs, player, combos, dangerInfo.player, true);
+  const structured = pressureChoices.filter((combo) => combo.type !== "single");
+  const heavyStructured = structured.filter((combo) => (
+    combo.type === "plane"
+    || combo.type === "doubleStraight"
+    || combo.type === "straight"
+    || combo.type === "triplePair"
+  ));
+
+  if (dangerInfo.turns <= 1) {
+    return heavyStructured[0] || structured[0] || pressureChoices[0] || null;
+  }
+
+  if (dangerInfo.isNext) {
+    return structured[0] || pressureChoices[0] || null;
+  }
+
+  return pressureChoices[0] || null;
+}
+
+function chooseDefensiveBeat(player, candidates, allCombos, dangerInfo) {
+  if (!dangerInfo || candidates.length === 0) {
+    return null;
+  }
+
+  const nonBombs = candidates.filter((combo) => combo.type !== "bomb" && combo.type !== "jokerBomb");
+  const source = nonBombs.length > 0 ? nonBombs : candidates;
+  const pressureChoices = sortByMemoryPressure(source, player, allCombos, dangerInfo.player, true);
+  const structured = pressureChoices.filter((combo) => combo.type !== "single");
+
+  if (dangerInfo.turns <= 1) {
+    return structured[0] || pressureChoices[0] || null;
+  }
+
+  if (dangerInfo.isNext) {
+    return structured[0] || pressureChoices[0] || null;
+  }
+
+  return pressureChoices[0] || null;
+}
+
+function chooseLeadCombo(player, combos, urgentOpponent, urgentTeammate, nextPlayer, dangerInfo = null) {
+  const defensiveThreat = shouldDefendAgainstOpponent(dangerInfo) && nextPlayer && nextPlayer.team !== player.team;
+  const searchedLead = getEndgameFirstCombo(player, combos);
+  if (searchedLead && !defensiveThreat) {
+    return searchedLead;
+  }
+
   const nonBombs = combos.filter((combo) => combo.type !== "bomb" && combo.type !== "jokerBomb");
   const planes = sortByConservativeUse(nonBombs.filter((combo) => combo.type === "plane"), player.hand, combos);
   const doubleStraights = sortByConservativeUse(nonBombs.filter((combo) => combo.type === "doubleStraight"), player.hand, combos);
@@ -1320,6 +1729,13 @@ function chooseLeadCombo(player, combos, urgentOpponent, urgentTeammate, nextPla
 
   if (urgentTeammate && nextPlayer && nextPlayer.team === player.team) {
     return preferredSingle || pairs[0] || triples[0] || conservativeNonBombs[0] || combos[0];
+  }
+
+  if (defensiveThreat) {
+    const defensiveLead = chooseDefensiveLead(player, combos, dangerInfo);
+    if (defensiveLead) {
+      return defensiveLead;
+    }
   }
 
   if (urgentOpponent) {
@@ -1362,9 +1778,12 @@ function chooseRecommendedMove(player) {
   const urgentOpponent = opponents.some((opponent) => opponent.hand.length <= 3);
   const urgentTeammate = teammate && !teammate.finished && teammate.hand.length <= 3;
   const twoHumanMode = isTwoHumanOnlineRoom();
+  const dangerInfo = getDangerousOpponentInfo(player, nextPlayer);
+  const defensiveOpponent = shouldDefendAgainstOpponent(dangerInfo);
+  const opponentAfterMe = nextPlayer && nextPlayer.team !== player.team;
 
   if (!state.currentCombo) {
-    return chooseLeadCombo(player, combos, urgentOpponent, urgentTeammate, nextPlayer);
+    return chooseLeadCombo(player, combos, urgentOpponent, urgentTeammate, nextPlayer, dangerInfo);
   }
 
   const lastPlayer = state.players[state.lastPlayPlayer];
@@ -1377,6 +1796,11 @@ function chooseRecommendedMove(player) {
     return null;
   }
 
+  const searchedBeat = getEndgameFirstCombo(player, beating);
+  if (searchedBeat && !(defensiveOpponent && opponentAfterMe)) {
+    return searchedBeat;
+  }
+
   const nonBombs = sortByConservativeUse(
     beating.filter((combo) => combo.type !== "bomb" && combo.type !== "jokerBomb"),
     player.hand,
@@ -1384,7 +1808,6 @@ function chooseRecommendedMove(player) {
   );
   const endgameNonBombs = sortByEndgamePlan(nonBombs, player, combos, urgentOpponent);
   const bombs = beating.filter((combo) => combo.type === "bomb" || combo.type === "jokerBomb");
-  const opponentAfterMe = nextPlayer && nextPlayer.team !== player.team;
   const teammateAfterMe = nextPlayer && nextPlayer.team === player.team;
   const teammateBeforeMe = previousPlayer && previousPlayer.team === player.team;
   const exactFinish = findExactFinishCombo(nonBombs, player, combos);
@@ -1393,7 +1816,7 @@ function chooseRecommendedMove(player) {
     return exactFinish;
   }
 
-  if ((twoHumanMode && player.hand.length <= 8) || player.hand.length <= 5) {
+  if (((twoHumanMode && player.hand.length <= 8) || player.hand.length <= 5) && !(defensiveOpponent && opponentAfterMe)) {
     if (endgameNonBombs.length > 0) {
       return endgameNonBombs[0];
     }
@@ -1417,11 +1840,25 @@ function chooseRecommendedMove(player) {
     }
   }
 
+  if (defensiveOpponent && opponentAfterMe) {
+    const defensiveBeat = chooseDefensiveBeat(player, endgameNonBombs.length > 0 ? endgameNonBombs : nonBombs, combos, dangerInfo);
+    if (defensiveBeat) {
+      return defensiveBeat;
+    }
+  }
+
   if (urgentOpponent) {
     if (endgameNonBombs.length > 0 && opponentAfterMe) {
       return twoHumanMode ? endgameNonBombs[0] : sortByPressure(nonBombs, player.hand, combos)[0];
     }
-    const bombAnswer = chooseBombResponse(player, bombs, nonBombs, combos, urgentOpponent, urgentTeammate, teammate);
+    const bombAnswer = chooseBombResponse(player, bombs, nonBombs, combos, urgentOpponent, urgentTeammate, teammate, dangerInfo);
+    if (bombAnswer) {
+      return bombAnswer;
+    }
+  }
+
+  if (defensiveOpponent) {
+    const bombAnswer = chooseBombResponse(player, bombs, nonBombs, combos, urgentOpponent, urgentTeammate, teammate, dangerInfo);
     if (bombAnswer) {
       return bombAnswer;
     }
@@ -1431,7 +1868,7 @@ function chooseRecommendedMove(player) {
     return twoHumanMode ? (endgameNonBombs[0] || nonBombs[0]) : nonBombs[0];
   }
 
-  return chooseBombResponse(player, bombs, nonBombs, combos, urgentOpponent, urgentTeammate, teammate);
+  return chooseBombResponse(player, bombs, nonBombs, combos, urgentOpponent, urgentTeammate, teammate, dangerInfo);
 }
 
 function chooseAiMove(player) {
@@ -2098,6 +2535,8 @@ function exportOnlineSnapshot() {
       ...item,
       combo: item.combo ? { ...item.combo, cards: item.combo.cards.map((card) => ({ ...card })) } : null,
     })),
+    playHistory: state.playHistory.map((item) => ({ ...item, ranks: [...item.ranks] })),
+    passHistory: state.passHistory.map((item) => ({ ...item })),
   };
 
   if (state.onlineMode) {
@@ -2152,6 +2591,8 @@ function importOnlineSnapshot(snapshot, localPlayerOwnerId) {
     ...item,
     combo: item.combo ? { ...item.combo, cards: item.combo.cards.map((card) => ({ ...card })) } : null,
   }));
+  state.playHistory = (snapshot.playHistory || []).map((item) => ({ ...item, ranks: [...(item.ranks || [])] }));
+  state.passHistory = (snapshot.passHistory || []).map((item) => ({ ...item }));
   state.lastOnlineSnapshotSignature = incomingSignature;
   render();
   return true;
@@ -2175,6 +2616,8 @@ function startOnlineRoundFromSetup(gameSetup, localPlayerOwnerId) {
   state.finishedOrder = [];
   state.winnerTeam = null;
   state.trickHistory = [];
+  state.playHistory = [];
+  state.passHistory = [];
   state.latestTrickToken = 0;
   state.selectedIds = new Set();
   state.matchScores = {};
@@ -2259,6 +2702,8 @@ function startNextOnlineRound() {
   state.finishedOrder = [];
   state.winnerTeam = null;
   state.trickHistory = [];
+  state.playHistory = [];
+  state.passHistory = [];
   state.latestTrickToken = 0;
   state.currentTributeInfo = null;
   state.selectedIds = new Set();
@@ -2433,6 +2878,51 @@ const debugApi = {
       currentTributeInfo: state.currentTributeInfo ? JSON.parse(JSON.stringify(state.currentTributeInfo)) : null,
       logs: [...state.logs],
     };
+  },
+  buildEndgamePlanForTest(cards) {
+    const plan = buildEndgamePlan(cards.map((card) => ({ ...card })));
+    return {
+      ...plan,
+      sequence: plan.sequence.map((combo) => ({
+        ...combo,
+        cards: combo.cards.map((card) => ({ ...card })),
+      })),
+    };
+  },
+  chooseRecommendedMoveForTest({
+    players,
+    currentPlayer,
+    currentCombo = null,
+    lastPlayPlayer = null,
+    levelRank = 3,
+    onlineMode = false,
+    playHistory = [],
+    passHistory = [],
+  }) {
+    state.players = players.map((player) => ({
+      ...player,
+      hand: (player.hand || []).map((card) => ({ ...card })),
+    }));
+    state.currentPlayer = currentPlayer;
+    state.currentCombo = currentCombo
+      ? {
+          ...currentCombo,
+          cards: currentCombo.cards.map((card) => ({ ...card })),
+        }
+      : null;
+    state.lastPlayPlayer = lastPlayPlayer;
+    state.levelRank = levelRank;
+    state.onlineMode = onlineMode;
+    state.playHistory = playHistory.map((item) => ({ ...item, ranks: [...(item.ranks || [])] }));
+    state.passHistory = passHistory.map((item) => ({ ...item }));
+    const player = state.players[currentPlayer];
+    const combo = chooseRecommendedMove(player);
+    return combo
+      ? {
+          ...combo,
+          cards: combo.cards.map((card) => ({ ...card })),
+        }
+      : null;
   },
 };
 

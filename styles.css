@@ -609,6 +609,15 @@ button:disabled {
   color: var(--accent-dark);
 }
 
+.chat-line-system {
+  border: 1px dashed rgba(198, 106, 43, 0.32);
+  background: rgba(198, 106, 43, 0.12);
+}
+
+.chat-line-system strong {
+  color: #8f4a17;
+}
+
 @media (max-width: 900px) {
   .online-game-chat {
     left: 12px;

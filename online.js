@@ -53,6 +53,9 @@
     syncingGame: false,
     lastRoomRenderSignature: "",
     actionPending: false,
+    pendingRequestType: "",
+    nextClientActionId: 1,
+    lastSystemEventId: "",
     chatMinimized: false,
     unreadChatCount: 0,
     lastSeenChatCreatedAt: 0,
@@ -87,62 +90,94 @@
       return state.actionPending;
     },
     sendAction(action) {
-      if (!state.roomId || !state.playerId) {
+      if (!state.roomId || !state.playerId || state.actionPending) {
         return Promise.resolve();
       }
       state.actionPending = true;
+      state.pendingRequestType = action.type || "action";
       window.GuandanApp?.renderNow?.();
       return api(`/rooms/${state.roomId}/actions`, {
         method: "POST",
         body: {
           playerId: state.playerId,
+          clientActionId: `${state.playerId}-${state.nextClientActionId++}`,
           ...action,
         },
       })
         .then(() => refreshRoom())
         .finally(() => {
           state.actionPending = false;
+          state.pendingRequestType = "";
           window.GuandanApp?.renderNow?.();
         });
     },
     async requestNextRound() {
-      if (!state.room || state.room.hostId !== state.playerId || !window.GuandanApp) {
-        notify(STRINGS.restoreStartDenied);
+      if (!state.room || state.room.hostId !== state.playerId || !window.GuandanApp || state.actionPending) {
+        if (!state.actionPending) {
+          notify(STRINGS.restoreStartDenied);
+        }
         return;
       }
+      state.actionPending = true;
+      state.pendingRequestType = "next-round";
+      window.GuandanApp?.renderNow?.();
       const snapshot = window.GuandanApp.startNextOnlineRound();
       if (!snapshot) {
+        state.actionPending = false;
+        state.pendingRequestType = "";
+        window.GuandanApp?.renderNow?.();
         return;
       }
-      await api(`/rooms/${state.roomId}/next-round`, {
-        method: "POST",
-        body: {
-          playerId: state.playerId,
-          gameState: snapshot,
-        },
-      });
-      state.room.gameState = snapshot;
-      await refreshRoom();
+      try {
+        await api(`/rooms/${state.roomId}/next-round`, {
+          method: "POST",
+          body: {
+            playerId: state.playerId,
+            gameState: snapshot,
+          },
+        });
+        state.room.gameState = snapshot;
+        await refreshRoom();
+      } finally {
+        state.actionPending = false;
+        state.pendingRequestType = "";
+        window.GuandanApp?.renderNow?.();
+      }
     },
     async requestRestartMatch() {
-      if (!state.room || state.room.hostId !== state.playerId || !window.GuandanApp?.restartOnlineMatch) {
-        notify("只有房主可以重新开始联机牌局。");
+      if (!state.room || state.room.hostId !== state.playerId || !window.GuandanApp?.restartOnlineMatch || state.actionPending) {
+        if (!state.actionPending) {
+          notify("\u53ea\u6709\u623f\u4e3b\u53ef\u4ee5\u91cd\u65b0\u5f00\u59cb\u8054\u673a\u724c\u5c40\u3002");
+        }
         return;
       }
+      state.actionPending = true;
+      state.pendingRequestType = "restart-match";
+      window.GuandanApp?.renderNow?.();
       const snapshot = window.GuandanApp.restartOnlineMatch();
       if (!snapshot) {
+        state.actionPending = false;
+        state.pendingRequestType = "";
+        window.GuandanApp?.renderNow?.();
         return;
       }
-      await api(`/rooms/${state.roomId}/next-round`, {
-        method: "POST",
-        body: {
-          playerId: state.playerId,
-          gameState: snapshot,
-        },
-      });
-      state.room.gameState = snapshot;
-      await refreshRoom();
-      notify("房主已重新开始牌局。");
+      try {
+        await api(`/rooms/${state.roomId}/next-round`, {
+          method: "POST",
+          body: {
+            playerId: state.playerId,
+            gameState: snapshot,
+            restartMatch: true,
+          },
+        });
+        state.room.gameState = snapshot;
+        await refreshRoom();
+      } finally {
+        state.actionPending = false;
+        state.pendingRequestType = "";
+        window.GuandanApp?.renderNow?.();
+      }
+      notify("\u623f\u4e3b\u5df2\u91cd\u65b0\u5f00\u59cb\u6574\u573a\u724c\u5c40\u3002");
     },
   };
 
@@ -198,6 +233,25 @@
       return;
     }
     window.alert(message);
+  }
+
+  function processSystemEvents(room, { silentInitial = false } = {}) {
+    const events = room?.systemEvents || [];
+    if (events.length === 0) {
+      return;
+    }
+    const lastSeenIndex = state.lastSystemEventId
+      ? events.findIndex((event) => event.id === state.lastSystemEventId)
+      : -1;
+    const unseen = lastSeenIndex >= 0
+      ? events.slice(lastSeenIndex + 1)
+      : (silentInitial ? [] : events.slice(-1));
+    if (unseen.length > 0) {
+      for (const event of unseen) {
+        notify(event.text);
+      }
+    }
+    state.lastSystemEventId = events[events.length - 1].id;
   }
 
   function markChatAsRead(room = state.room) {
@@ -270,6 +324,11 @@
           text: message.text,
           createdAt: message.createdAt,
         })),
+        systemEvents: (room.systemEvents || []).map((event) => ({
+          id: event.id,
+          text: event.text,
+          createdAt: event.createdAt,
+        })),
         gameSetup: room.gameSetup ? {
           seats: room.gameSetup.seats.map((seat) => ({
             seatId: seat.seatId,
@@ -313,9 +372,11 @@
     state.roomId = null;
     state.room = null;
     state.actionPending = false;
+    state.pendingRequestType = "";
     state.chatMinimized = false;
     state.unreadChatCount = 0;
     state.lastSeenChatCreatedAt = 0;
+    state.lastSystemEventId = "";
     state.lastRoomRenderSignature = "";
     clearActiveRoom();
     renderRoom();
@@ -439,11 +500,13 @@
         return;
       }
       state.room = result.room;
+      processSystemEvents(result.room, { silentInitial: true });
       if (result.room.status === "closed") {
         resetRoomStateToHome(result.room.closedNotice || "当前牌局已结束。");
         return;
       }
       setView(result.room.status === "started" ? "online-game" : "online");
+      notify(result.room.status === "started" ? "\u5df2\u6062\u590d\u5230\u8054\u673a\u724c\u5c40\u3002" : "\u5df2\u6062\u590d\u5230\u8054\u673a\u623f\u95f4\u3002");
       startPolling();
       await maybeSyncOnlineGame();
       renderRoom();
@@ -460,6 +523,7 @@
     }
     const result = await api(`/rooms/${state.roomId}?playerId=${encodeURIComponent(state.playerId || "")}`);
     state.room = result.room;
+    processSystemEvents(result.room);
     if (result.room.status === "closed") {
       resetRoomStateToHome(result.room.closedNotice || "当前牌局已结束。");
       return;
@@ -480,6 +544,7 @@
       },
     });
     state.room = result.room;
+    processSystemEvents(result.room);
     renderRoom();
     await maybeSyncOnlineGame();
   }
@@ -499,6 +564,7 @@
       },
     });
     state.room = result.room;
+    processSystemEvents(result.room);
     renderRoom();
   }
 
@@ -516,6 +582,8 @@
     state.roomId = null;
     state.room = null;
     state.actionPending = false;
+    state.pendingRequestType = "";
+    state.lastSystemEventId = "";
     state.lastRoomRenderSignature = "";
     clearActiveRoom();
     renderRoom();
@@ -701,12 +769,30 @@
       updateChatChrome(room);
       return;
     }
-    const latestMessage = room.chat.length ? room.chat[room.chat.length - 1] : null;
+    const timeline = [
+      ...(room.chat || []).map((message) => ({
+        kind: "chat",
+        id: message.id || `chat-${message.createdAt}-${message.senderId || ""}`,
+        senderId: message.senderId,
+        senderName: message.senderName,
+        text: message.text,
+        createdAt: message.createdAt || 0,
+      })),
+      ...(room.systemEvents || []).map((event) => ({
+        kind: "system",
+        id: event.id || `system-${event.createdAt || 0}`,
+        text: event.text,
+        createdAt: event.createdAt || 0,
+      })),
+    ].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+
+    const latestMessage = timeline.length ? timeline[timeline.length - 1] : null;
+    const isUnreadCandidate = latestMessage?.kind === "system" || latestMessage?.senderId !== state.playerId;
     const latestCreatedAt = latestMessage?.createdAt || 0;
     const hasUnreadIncoming = Boolean(
       latestMessage
       && latestCreatedAt > state.lastSeenChatCreatedAt
-      && latestMessage.senderId !== state.playerId
+      && isUnreadCandidate
     );
 
     if (state.view === "online-game" && !state.chatMinimized) {
@@ -717,7 +803,7 @@
       flashChatWindow();
     }
 
-    if (!room.chat.length) {
+    if (!timeline.length) {
       const empty = document.createElement("div");
       empty.className = "muted-text";
       empty.textContent = STRINGS.emptyChat;
@@ -725,10 +811,14 @@
       updateChatChrome(room);
       return;
     }
-    for (const message of room.chat) {
+    for (const message of timeline) {
       const row = document.createElement("div");
-      row.className = "chat-line";
-      row.innerHTML = `<strong>${escapeHtml(message.senderName)}</strong><span>${escapeHtml(message.text)}</span>`;
+      row.className = `chat-line ${message.kind === "system" ? "chat-line-system" : ""}`;
+      if (message.kind === "system") {
+        row.innerHTML = `<strong>系统消息</strong><span>${escapeHtml(message.text)}</span>`;
+      } else {
+        row.innerHTML = `<strong>${escapeHtml(message.senderName)}</strong><span>${escapeHtml(message.text)}</span>`;
+      }
       els.chatLog.appendChild(row);
     }
     if (!state.chatMinimized) {
@@ -746,9 +836,10 @@
     }
     state.lastRoomRenderSignature = renderSignature;
 
-    els.startRoomBtn.disabled = !joined;
-    els.leaveRoomBtn.disabled = !joined;
-    els.sendChatBtn.disabled = !joined;
+    const interactionLocked = state.actionPending || state.syncingGame;
+    els.startRoomBtn.disabled = !joined || interactionLocked;
+    els.leaveRoomBtn.disabled = !joined || interactionLocked;
+    els.sendChatBtn.disabled = !joined || interactionLocked;
     els.copyRoomCodeBtn.classList.toggle("hidden", !joined);
     els.roomLobbyOptions.classList.toggle("hidden", !joined || room?.status !== "lobby");
 
@@ -783,7 +874,7 @@
       : STRINGS.lobbySummary(humanCount, hostName);
     els.roomCodePill.classList.remove("hidden");
     els.roomCodePill.textContent = `${STRINGS.roomCode} ${room.id}`;
-    els.startRoomBtn.disabled = !canStart;
+    els.startRoomBtn.disabled = !canStart || interactionLocked;
     els.restartMatchBtn.classList.toggle("hidden", !(room.status === "started" && isHost && state.view === "online-game"));
 
     renderPlayers(room);

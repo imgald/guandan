@@ -93,13 +93,28 @@ function createRoom(name, playerId) {
     ],
     chat: [],
     closedNotice: null,
+    systemEvents: [],
     gameSetup: null,
     gameState: null,
     actions: [],
     nextActionId: 1,
+    recentActionKeys: [],
   };
   rooms.set(roomId, room);
   return room;
+}
+
+function addSystemEvent(room, type, text) {
+  const event = {
+    id: crypto.randomUUID(),
+    type,
+    text,
+    createdAt: Date.now(),
+  };
+  room.systemEvents.push(event);
+  room.systemEvents = room.systemEvents.slice(-40);
+  room.updatedAt = Date.now();
+  return event;
 }
 
 function getRoomOrThrow(roomId) {
@@ -130,12 +145,17 @@ function touchPlayer(room, playerId) {
   }
   const player = room.players.find((item) => item.id === playerId);
   if (player) {
+    const wasOffline = player.status === "offline";
     player.status = "online";
     player.lastSeenAt = Date.now();
+    if (wasOffline) {
+      addSystemEvent(room, "player-online", `${player.name} \u5df2\u91cd\u65b0\u8fde\u63a5\u3002`);
+    }
   }
 }
 
 function reassignHostIfNeeded(room) {
+  const previousHostId = room.hostId;
   const currentHost = room.players.find((item) => item.id === room.hostId);
   if (currentHost && currentHost.status === "online") {
     return;
@@ -143,17 +163,33 @@ function reassignHostIfNeeded(room) {
   const nextHost = room.players.find((item) => item.status === "online") || room.players[0];
   if (nextHost) {
     room.hostId = nextHost.id;
+    if (previousHostId && previousHostId !== nextHost.id) {
+      addSystemEvent(room, "host-changed", `${nextHost.name} \u5df2\u6210\u4e3a\u65b0\u7684\u623f\u4e3b\u3002`);
+    }
   }
 }
 
 function refreshPresence(room) {
   const now = Date.now();
   for (const player of room.players) {
-    if (player.lastSeenAt && now - player.lastSeenAt > offlineTimeoutMs) {
-      player.status = "offline";
+    const nextStatus = player.lastSeenAt && now - player.lastSeenAt > offlineTimeoutMs ? "offline" : "online";
+    if (player.status !== nextStatus) {
+      player.status = nextStatus;
+      if (nextStatus === "offline") {
+        addSystemEvent(room, "player-offline", `${player.name} \u5df2\u65ad\u7ebf\u3002`);
+      }
     }
   }
   reassignHostIfNeeded(room);
+}
+
+function rememberActionKey(room, key) {
+  room.recentActionKeys.push(key);
+  room.recentActionKeys = room.recentActionKeys.slice(-80);
+}
+
+function hasActionKey(room, key) {
+  return room.recentActionKeys.includes(key);
 }
 
 function snapshotRoom(room) {
@@ -170,6 +206,7 @@ function snapshotRoom(room) {
     })),
     chat: room.chat.slice(-40),
     closedNotice: room.closedNotice || null,
+    systemEvents: room.systemEvents.slice(-20),
     gameSetup: room.gameSetup,
     gameState: room.gameState,
     updatedAt: room.updatedAt,
@@ -317,6 +354,7 @@ async function handleApi(req, res, pathname) {
       }
       room.status = "closed";
       room.closedNotice = `${player.name} 已退出当前牌局，本局已结束。`;
+      addSystemEvent(room, "room-closed", `${player.name} \u5df2\u9000\u51fa\u5f53\u524d\u724c\u5c40\uff0c\u623f\u95f4\u5df2\u5173\u95ed\u3002`);
       room.gameState = null;
       room.gameSetup = null;
       room.actions = [];
@@ -368,6 +406,7 @@ async function handleApi(req, res, pathname) {
     room.actions = [];
     room.nextActionId = 1;
     room.gameState = null;
+    addSystemEvent(room, "match-started", `\u623f\u4e3b\u5df2\u5f00\u59cb\u6e38\u620f\uff0c\u672c\u5c40\u6a21\u5f0f\uff1a${room.players.length === 2 ? "\u53cc\u4eba+AI" : "\u591a\u4eba\u968f\u673a\u7ec4\u961f"}\u3002`);
     room.updatedAt = Date.now();
     sendJson(res, 200, { room: snapshotRoom(room) });
     return;
@@ -411,15 +450,24 @@ async function handleApi(req, res, pathname) {
       return;
     }
     const type = body.type === "pass" ? "pass" : "play";
+    const actionKey = `${player.id}:${String(body.clientActionId || "")}`;
+    if (body.clientActionId && hasActionKey(room, actionKey)) {
+      sendJson(res, 200, { ok: true, duplicate: true });
+      return;
+    }
     const actionItem = {
       id: room.nextActionId++,
       playerId: player.id,
       seatId: seat.seatId,
       type,
+      clientActionId: body.clientActionId || null,
       cardIds: Array.isArray(body.cardIds) ? body.cardIds.slice(0, 40) : [],
       createdAt: Date.now(),
     };
     room.actions.push(actionItem);
+    if (body.clientActionId) {
+      rememberActionKey(room, actionKey);
+    }
     room.updatedAt = Date.now();
     sendJson(res, 200, { ok: true, action: actionItem });
     return;
@@ -477,6 +525,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
     room.gameState = body.gameState || null;
+    addSystemEvent(room, "next-round", body.restartMatch ? "\u623f\u4e3b\u5df2\u91cd\u65b0\u5f00\u59cb\u6574\u573a\uff0c\u4e3b\u724c\u91cd\u7f6e\u4e3a 3\u3002" : "\u623f\u4e3b\u5df2\u5f00\u59cb\u4e0b\u4e00\u5c40\u3002");
     room.updatedAt = Date.now();
     sendJson(res, 200, { room: snapshotRoom(room) });
     return;
@@ -515,6 +564,12 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(port, () => {
-  console.log(`Guandan server listening on http://localhost:${port}`);
-});
+if (require.main === module) {
+  server.listen(port, () => {
+    console.log(`Guandan server listening on http://localhost:${port}`);
+  });
+}
+
+module.exports = {
+  server,
+};
