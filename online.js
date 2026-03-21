@@ -10,6 +10,8 @@
     localTable: document.getElementById("local-table"),
     onlineShell: document.getElementById("online-shell"),
     backHomeBtn: document.getElementById("back-home-btn"),
+    restartMatchBtn: document.getElementById("restart-match-btn"),
+    exitOnlineGameBtn: document.getElementById("exit-online-game-btn"),
     infoToggleBtn: document.getElementById("info-toggle-btn"),
     newGameBtn: document.getElementById("new-game-btn"),
     sortBtn: document.getElementById("sort-btn"),
@@ -30,6 +32,8 @@
     startRoomBtn: document.getElementById("start-room-btn"),
     leaveRoomBtn: document.getElementById("leave-room-btn"),
     chatSection: document.getElementById("online-chat-section"),
+    chatToggleBtn: document.getElementById("chat-toggle-btn"),
+    chatUnreadBadge: document.getElementById("chat-unread-badge"),
     chatLog: document.getElementById("chat-log"),
     chatInput: document.getElementById("chat-input"),
     sendChatBtn: document.getElementById("send-chat-btn"),
@@ -49,6 +53,10 @@
     syncingGame: false,
     lastRoomRenderSignature: "",
     actionPending: false,
+    chatMinimized: false,
+    unreadChatCount: 0,
+    lastSeenChatCreatedAt: 0,
+    chatFlashTimer: null,
   };
 
   const STRINGS = {
@@ -116,6 +124,26 @@
       state.room.gameState = snapshot;
       await refreshRoom();
     },
+    async requestRestartMatch() {
+      if (!state.room || state.room.hostId !== state.playerId || !window.GuandanApp?.restartOnlineMatch) {
+        notify("只有房主可以重新开始联机牌局。");
+        return;
+      }
+      const snapshot = window.GuandanApp.restartOnlineMatch();
+      if (!snapshot) {
+        return;
+      }
+      await api(`/rooms/${state.roomId}/next-round`, {
+        method: "POST",
+        body: {
+          playerId: state.playerId,
+          gameState: snapshot,
+        },
+      });
+      state.room.gameState = snapshot;
+      await refreshRoom();
+      notify("房主已重新开始牌局。");
+    },
   };
 
   if (state.playerName) {
@@ -170,6 +198,42 @@
       return;
     }
     window.alert(message);
+  }
+
+  function markChatAsRead(room = state.room) {
+    const latestCreatedAt = room?.chat?.length ? (room.chat[room.chat.length - 1].createdAt || 0) : 0;
+    state.lastSeenChatCreatedAt = latestCreatedAt;
+    state.unreadChatCount = 0;
+  }
+
+  function updateChatChrome(room = state.room) {
+    const visibleInGame = Boolean(room && room.status === "started");
+    const showChat = visibleInGame && state.view === "online-game";
+    els.chatSection.classList.toggle("hidden", !showChat);
+    els.chatSection.classList.toggle("chat-minimized", Boolean(showChat && state.chatMinimized));
+    if (els.chatToggleBtn) {
+      els.chatToggleBtn.textContent = state.chatMinimized ? "展开" : "最小化";
+    }
+    if (els.chatUnreadBadge) {
+      els.chatUnreadBadge.textContent = String(state.unreadChatCount);
+      els.chatUnreadBadge.classList.toggle("hidden", state.unreadChatCount <= 0);
+    }
+  }
+
+  function flashChatWindow() {
+    if (!els.chatSection || !state.chatMinimized) {
+      return;
+    }
+    els.chatSection.classList.remove("chat-flash");
+    void els.chatSection.offsetWidth;
+    els.chatSection.classList.add("chat-flash");
+    if (state.chatFlashTimer) {
+      window.clearTimeout(state.chatFlashTimer);
+    }
+    state.chatFlashTimer = window.setTimeout(() => {
+      els.chatSection.classList.remove("chat-flash");
+      state.chatFlashTimer = null;
+    }, 900);
   }
 
   async function copyRoomCodeWithToast() {
@@ -235,10 +299,30 @@
     els.localTable.classList.toggle("hidden", !showsTable);
     els.onlineShell.classList.toggle("hidden", !isOnline);
 
-    els.backHomeBtn.classList.toggle("hidden", isHome);
+    els.backHomeBtn.classList.toggle("hidden", isHome || isOnlineGame);
+    els.exitOnlineGameBtn.classList.toggle("hidden", !isOnlineGame);
+    els.restartMatchBtn.classList.toggle("hidden", !isOnlineGame);
     els.infoToggleBtn.classList.toggle("hidden", !showsTable);
     els.newGameBtn.classList.toggle("hidden", !isLocal);
     els.sortBtn.classList.toggle("hidden", !showsTable);
+    updateChatChrome();
+  }
+
+  function resetRoomStateToHome(message = "") {
+    stopPolling();
+    state.roomId = null;
+    state.room = null;
+    state.actionPending = false;
+    state.chatMinimized = false;
+    state.unreadChatCount = 0;
+    state.lastSeenChatCreatedAt = 0;
+    state.lastRoomRenderSignature = "";
+    clearActiveRoom();
+    renderRoom();
+    setView("home");
+    if (message) {
+      notify(message);
+    }
   }
 
   function normalizeNameForAction(mode) {
@@ -355,6 +439,10 @@
         return;
       }
       state.room = result.room;
+      if (result.room.status === "closed") {
+        resetRoomStateToHome(result.room.closedNotice || "当前牌局已结束。");
+        return;
+      }
       setView(result.room.status === "started" ? "online-game" : "online");
       startPolling();
       await maybeSyncOnlineGame();
@@ -372,6 +460,10 @@
     }
     const result = await api(`/rooms/${state.roomId}?playerId=${encodeURIComponent(state.playerId || "")}`);
     state.room = result.room;
+    if (result.room.status === "closed") {
+      resetRoomStateToHome(result.room.closedNotice || "当前牌局已结束。");
+      return;
+    }
     await maybeSyncOnlineGame();
     renderRoom();
   }
@@ -512,6 +604,9 @@
       },
     });
     els.chatInput.value = "";
+    if (!state.chatMinimized) {
+      markChatAsRead();
+    }
     await refreshRoom();
   }
 
@@ -603,13 +698,31 @@
   function renderChat(room) {
     els.chatLog.innerHTML = "";
     if (!room) {
+      updateChatChrome(room);
       return;
     }
+    const latestMessage = room.chat.length ? room.chat[room.chat.length - 1] : null;
+    const latestCreatedAt = latestMessage?.createdAt || 0;
+    const hasUnreadIncoming = Boolean(
+      latestMessage
+      && latestCreatedAt > state.lastSeenChatCreatedAt
+      && latestMessage.senderId !== state.playerId
+    );
+
+    if (state.view === "online-game" && !state.chatMinimized) {
+      markChatAsRead(room);
+    } else if (hasUnreadIncoming) {
+      state.unreadChatCount += 1;
+      state.lastSeenChatCreatedAt = latestCreatedAt;
+      flashChatWindow();
+    }
+
     if (!room.chat.length) {
       const empty = document.createElement("div");
       empty.className = "muted-text";
       empty.textContent = STRINGS.emptyChat;
       els.chatLog.appendChild(empty);
+      updateChatChrome(room);
       return;
     }
     for (const message of room.chat) {
@@ -618,7 +731,10 @@
       row.innerHTML = `<strong>${escapeHtml(message.senderName)}</strong><span>${escapeHtml(message.text)}</span>`;
       els.chatLog.appendChild(row);
     }
-    els.chatLog.scrollTop = els.chatLog.scrollHeight;
+    if (!state.chatMinimized) {
+      els.chatLog.scrollTop = els.chatLog.scrollHeight;
+    }
+    updateChatChrome(room);
   }
 
   function renderRoom() {
@@ -633,7 +749,6 @@
     els.startRoomBtn.disabled = !joined;
     els.leaveRoomBtn.disabled = !joined;
     els.sendChatBtn.disabled = !joined;
-    els.chatSection.classList.toggle("hidden", !joined);
     els.copyRoomCodeBtn.classList.toggle("hidden", !joined);
     els.roomLobbyOptions.classList.toggle("hidden", !joined || room?.status !== "lobby");
 
@@ -648,6 +763,8 @@
       els.roomSetupBox.classList.add("hidden");
       els.roomSetupBox.innerHTML = "";
       els.chatLog.innerHTML = "";
+      els.restartMatchBtn.classList.add("hidden");
+      updateChatChrome(room);
       return;
     }
 
@@ -667,10 +784,12 @@
     els.roomCodePill.classList.remove("hidden");
     els.roomCodePill.textContent = `${STRINGS.roomCode} ${room.id}`;
     els.startRoomBtn.disabled = !canStart;
+    els.restartMatchBtn.classList.toggle("hidden", !(room.status === "started" && isHost && state.view === "online-game"));
 
     renderPlayers(room);
     renderSetup(room);
     renderChat(room);
+    updateChatChrome(room);
   }
 
   els.enterLocalBtn.addEventListener("click", () => {
@@ -695,6 +814,12 @@
     stopPolling();
     setView("home");
   });
+  els.exitOnlineGameBtn.addEventListener("click", () => {
+    leaveRoom().catch((error) => notify(error.message));
+  });
+  els.restartMatchBtn.addEventListener("click", () => {
+    window.GuandanOnlineBridge.requestRestartMatch().catch((error) => notify(error.message));
+  });
 
   els.createRoomBtn.addEventListener("click", () => {
     createRoom().catch((error) => notify(error.message));
@@ -714,6 +839,14 @@
 
   els.sendChatBtn.addEventListener("click", () => {
     sendChat().catch((error) => notify(error.message));
+  });
+  els.chatToggleBtn.addEventListener("click", () => {
+    state.chatMinimized = !state.chatMinimized;
+    if (!state.chatMinimized) {
+      markChatAsRead();
+      els.chatLog.scrollTop = els.chatLog.scrollHeight;
+    }
+    updateChatChrome();
   });
 
   els.chatInput.addEventListener("keydown", (event) => {

@@ -2367,6 +2367,7 @@ window.GuandanApp = {
   startLocalGame: startNewGame,
   startOnlineRoundFromSetup,
   startNextOnlineRound,
+  restartOnlineMatch,
   importOnlineSnapshot,
   exportOnlineSnapshot,
   processOnlineAction,

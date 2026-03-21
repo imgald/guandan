@@ -92,6 +92,7 @@ function createRoom(name, playerId) {
       },
     ],
     chat: [],
+    closedNotice: null,
     gameSetup: null,
     gameState: null,
     actions: [],
@@ -168,6 +169,7 @@ function snapshotRoom(room) {
       joinedAt: player.joinedAt,
     })),
     chat: room.chat.slice(-40),
+    closedNotice: room.closedNotice || null,
     gameSetup: room.gameSetup,
     gameState: room.gameState,
     updatedAt: room.updatedAt,
@@ -306,6 +308,22 @@ async function handleApi(req, res, pathname) {
 
   if (req.method === "POST" && action === "leave") {
     const player = ensurePlayer(room, body.playerId);
+    if (room.status === "started") {
+      room.players = room.players.filter((item) => item.id !== player.id);
+      if (room.players.length === 0) {
+        rooms.delete(room.id);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+      room.status = "closed";
+      room.closedNotice = `${player.name} 已退出当前牌局，本局已结束。`;
+      room.gameState = null;
+      room.gameSetup = null;
+      room.actions = [];
+      room.updatedAt = Date.now();
+      sendJson(res, 200, { room: snapshotRoom(room) });
+      return;
+    }
     room.players = room.players.filter((item) => item.id !== player.id);
     if (room.hostId === player.id && room.players.length > 0) {
       room.hostId = room.players[0].id;
@@ -346,6 +364,7 @@ async function handleApi(req, res, pathname) {
       mode: room.players.length === 2 ? "2p-plus-ai" : "mixed-teams",
       startPolicy,
     };
+    room.closedNotice = null;
     room.actions = [];
     room.nextActionId = 1;
     room.gameState = null;
