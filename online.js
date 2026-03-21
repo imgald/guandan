@@ -2,6 +2,7 @@
   const apiBase = "/api";
   const recentRoomsKey = "guandan-online-recent-rooms";
   const activeRoomKey = "guandan-online-active-room";
+  const activeRoomStatusKey = "guandan-online-active-room-status";
   const playerIdKey = "guandan-online-player-id";
   const playerNameKey = "guandan-online-player-name";
 
@@ -217,6 +218,13 @@
     renderRecentRooms();
   }
 
+  function rememberRoomStatus(status) {
+    if (!status) {
+      return;
+    }
+    localStorage.setItem(activeRoomStatusKey, status);
+  }
+
   function clearRecentRooms() {
     state.recentRooms = [];
     saveRecentRooms();
@@ -225,6 +233,7 @@
 
   function clearActiveRoom() {
     localStorage.removeItem(activeRoomKey);
+    localStorage.removeItem(activeRoomStatusKey);
   }
 
   function escapeHtml(value) {
@@ -507,6 +516,7 @@
     state.roomId = result.room.id;
     state.room = result.room;
     rememberRoom(result.room.id);
+    rememberRoomStatus(result.room.status);
     setView("online");
     renderRoom();
     startPolling();
@@ -530,6 +540,7 @@
     state.roomId = result.room.id;
     state.room = result.room;
     rememberRoom(result.room.id);
+    rememberRoomStatus(result.room.status);
     els.joinRoomInput.value = result.room.id;
     if ((result.room.spectators || []).some((spectator) => spectator.id === result.playerId)) {
       notify(STRINGS.spectatorJoined);
@@ -554,6 +565,7 @@
         return;
       }
       state.room = result.room;
+      rememberRoomStatus(result.room.status);
       processSystemEvents(result.room, { silentInitial: true });
       if (result.room.status === "closed") {
         resetRoomStateToHome(result.room.closedNotice || "\u5f53\u524d\u724c\u5c40\u5df2\u7ed3\u675f\u3002");
@@ -564,7 +576,15 @@
       startPolling();
       await maybeSyncOnlineGame();
       renderRoom();
-    } catch {
+    } catch (error) {
+      if (state.room?.status === "started") {
+        setView("online-game");
+        try {
+          renderRoom();
+        } catch {}
+        console.error("online restore warning:", error);
+        return;
+      }
       clearActiveRoom();
       state.roomId = null;
       state.room = null;
@@ -577,6 +597,7 @@
     }
     const result = await api(`/rooms/${state.roomId}?playerId=${encodeURIComponent(state.playerId || "")}`);
     state.room = result.room;
+    rememberRoomStatus(result.room.status);
     processSystemEvents(result.room);
     if (result.room.status === "closed") {
       resetRoomStateToHome(result.room.closedNotice || "\u5f53\u524d\u724c\u5c40\u5df2\u7ed3\u675f\u3002");
@@ -598,6 +619,7 @@
       },
     });
     state.room = result.room;
+    rememberRoomStatus(result.room.status);
     processSystemEvents(result.room);
     renderRoom();
     await maybeSyncOnlineGame();
@@ -618,6 +640,7 @@
       },
     });
     state.room = result.room;
+    rememberRoomStatus(result.room.status);
     processSystemEvents(result.room);
     renderRoom();
   }
@@ -638,6 +661,7 @@
       },
     });
     state.room = result.room;
+    rememberRoomStatus(result.room.status);
     processSystemEvents(result.room);
     renderRoom();
   }
@@ -654,6 +678,7 @@
       },
     });
     state.room = result.room;
+    rememberRoomStatus(result.room.status);
     processSystemEvents(result.room);
     renderRoom();
   }
@@ -835,7 +860,8 @@
         kickBtn.addEventListener("click", () => {
           kickMember(player.id).catch((error) => notify(error.message));
         });
-        item.querySelector(".room-member-side")?.appendChild(kickBtn);
+        const memberSide = item.querySelector?.(".room-member-side") || item;
+        memberSide.appendChild(kickBtn);
       }
       els.roomPlayerList.appendChild(item);
     }
@@ -869,7 +895,8 @@
         kickBtn.addEventListener("click", () => {
           kickMember(spectator.id).catch((error) => notify(error.message));
         });
-        item.querySelector(".room-member-side")?.appendChild(kickBtn);
+        const memberSide = item.querySelector?.(".room-member-side") || item;
+        memberSide.appendChild(kickBtn);
       }
       els.roomSpectatorList.appendChild(item);
     }
@@ -1068,6 +1095,8 @@
       state.playerId = persistedPlayerId;
     }
     if (state.roomId) {
+      const persistedRoomStatus = localStorage.getItem(activeRoomStatusKey);
+      setView((state.room?.status || persistedRoomStatus) === "started" ? "online-game" : "online");
       try {
         await tryRestoreActiveRoom();
       } catch {}

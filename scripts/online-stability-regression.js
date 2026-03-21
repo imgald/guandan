@@ -153,6 +153,73 @@ async function main() {
     assert(afterClose.room.status === "started", "match should continue when the current host exits during a started game");
     assert(afterClose.room.hostId === hostPlayerId, "host should transfer back to the remaining online player");
     assert(afterClose.room.systemEvents.some((event) => event.type === "host-left"), "host exit should emit a host-left system event");
+
+    const soloCreated = await api(baseUrl, "/rooms", {
+      method: "POST",
+      body: {
+        name: "SoloHost",
+      },
+    });
+    const soloHostId = soloCreated.playerId;
+    const soloRoomId = soloCreated.room.id;
+
+    const soloGuest = await api(baseUrl, `/rooms/${soloRoomId}/join`, {
+      method: "POST",
+      body: {
+        name: "SoloGuest",
+      },
+    });
+    const soloGuestId = soloGuest.playerId;
+
+    await api(baseUrl, `/rooms/${soloRoomId}/ready`, {
+      method: "POST",
+      body: {
+        playerId: soloHostId,
+        ready: true,
+      },
+    });
+    await api(baseUrl, `/rooms/${soloRoomId}/ready`, {
+      method: "POST",
+      body: {
+        playerId: soloGuestId,
+        ready: true,
+      },
+    });
+
+    await api(baseUrl, `/rooms/${soloRoomId}/start`, {
+      method: "POST",
+      body: {
+        playerId: soloHostId,
+        startPolicy: "quick-2",
+      },
+    });
+
+    const watcherJoined = await api(baseUrl, `/rooms/${soloRoomId}/join`, {
+      method: "POST",
+      body: {
+        name: "Watcher",
+        asSpectator: true,
+      },
+    });
+    const watcherId = watcherJoined.playerId;
+
+    await api(baseUrl, `/rooms/${soloRoomId}/leave`, {
+      method: "POST",
+      body: {
+        playerId: soloGuestId,
+      },
+    });
+
+    await api(baseUrl, `/rooms/${soloRoomId}/leave`, {
+      method: "POST",
+      body: {
+        playerId: soloHostId,
+      },
+    });
+
+    const afterSoloClose = await api(baseUrl, `/rooms/${soloRoomId}?playerId=${encodeURIComponent(watcherId)}`);
+    assert(afterSoloClose.room.status === "closed", "room should close when the final player exits and spectators remain");
+    assert(afterSoloClose.room.closedNotice, "closed room should expose a notice to spectators");
   });
 
   console.log("online-stability-regression: ok");

@@ -419,8 +419,19 @@ async function handleApi(req, res, pathname) {
       const leavingHost = room.hostId === player.id;
       room.players = room.players.filter((item) => item.id !== player.id);
       if (room.players.length === 0) {
-        rooms.delete(room.id);
-        sendJson(res, 200, { ok: true });
+        if (room.spectators.length === 0) {
+          rooms.delete(room.id);
+          sendJson(res, 200, { ok: true });
+          return;
+        }
+        room.status = "closed";
+        room.closedNotice = `${player.name} 已退出当前牌局，当前已无在场玩家，房间已关闭。`;
+        addSystemEvent(room, "room-closed", `${player.name} 已退出当前牌局，当前已无在场玩家，房间已关闭。`);
+        room.gameState = null;
+        room.gameSetup = null;
+        room.actions = [];
+        room.updatedAt = Date.now();
+        sendJson(res, 200, { room: snapshotRoom(room) });
         return;
       }
       if (leavingHost) {
