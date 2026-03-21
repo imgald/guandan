@@ -135,9 +135,9 @@ async function main() {
       },
     });
     const afterClose = await api(baseUrl, `/rooms/${roomId}?playerId=${encodeURIComponent(hostPlayerId)}`);
-    assert(afterClose.room.status === "closed", "match should close when a player exits during a started game");
-    assert(afterClose.room.closedNotice, "closed room should expose a closed notice");
-    assert(afterClose.room.systemEvents.some((event) => event.type === "room-closed"), "closing the room should emit a system event");
+    assert(afterClose.room.status === "started", "match should continue when the current host exits during a started game");
+    assert(afterClose.room.hostId === hostPlayerId, "host should transfer back to the remaining online player");
+    assert(afterClose.room.systemEvents.some((event) => event.type === "host-left"), "host exit should emit a host-left system event");
   });
 
   console.log("online-stability-regression: ok");

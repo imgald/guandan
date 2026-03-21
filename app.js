@@ -213,6 +213,15 @@ function showErrorToast(message) {
   }, 2800);
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function isGameplayViewVisible() {
   return Boolean(els.localTable && !els.localTable.classList.contains("hidden"));
 }
@@ -2188,6 +2197,15 @@ function getHumanPlayableContext() {
   };
 }
 
+function chooseSmallestPlayableCombo(context = getHumanPlayableContext()) {
+  const localPlayer = getLocalSeatPlayer();
+  if (!localPlayer || !context.beatingCombos.length) {
+    return null;
+  }
+  const ordered = sortByConservativeUse(context.beatingCombos, localPlayer.hand, context.allCombos);
+  return ordered[0] || null;
+}
+
 function getLatestAiPlay() {
   return state.trickHistory.find((item) => !item.reset && state.players[item.playerId]?.controlledByAi) || null;
 }
@@ -2295,14 +2313,38 @@ function render() {
 
   if (state.winnerTeam !== null) {
     els.turnIndicator.classList.remove("turn-active");
-    els.turnIndicator.textContent = "本局已结束，请等待房主开始下一局。";
+    els.turnIndicator.innerHTML = `
+      <div class="turn-hud-main">
+        <span class="turn-hud-badge">本局状态</span>
+        <span class="turn-hud-name">本局已结束</span>
+      </div>
+      <div class="turn-hud-meta">
+        <span class="turn-hud-chip turn-hud-chip-muted">请等待房主开始下一局</span>
+      </div>
+    `;
   } else {
     const current = state.players[state.currentPlayer];
     const aiSuffix = isTwoHumanOnlineRoom() && current.controlledByAi ? " 这是 AI 回合，请稍候。" : "";
     const busySuffix = isOnlineActionLocked() ? " 动作提交中，请稍候。" : "";
     els.turnIndicator.classList.add("turn-active");
     const roleLabel = current.controlledByAi ? "AI" : "玩家";
-    els.turnIndicator.textContent = `当前行动：${current.name}（${roleLabel}） · ${getLocalPerspectiveTeam(current.team)}。${aiSuffix}${busySuffix}`;
+    const statusChips = [
+      `<span class="turn-hud-chip">${escapeHtml(roleLabel)}</span>`,
+      `<span class="turn-hud-chip">${escapeHtml(getLocalPerspectiveTeam(current.team))}</span>`,
+    ];
+    if (aiSuffix) {
+      statusChips.push(`<span class="turn-hud-chip turn-hud-chip-warn">${escapeHtml(aiSuffix.trim())}</span>`);
+    }
+    if (busySuffix) {
+      statusChips.push(`<span class="turn-hud-chip turn-hud-chip-busy">${escapeHtml(busySuffix.trim())}</span>`);
+    }
+    els.turnIndicator.innerHTML = `
+      <div class="turn-hud-main">
+        <span class="turn-hud-badge">当前行动</span>
+        <span class="turn-hud-name">${escapeHtml(current.name)}</span>
+      </div>
+      <div class="turn-hud-meta">${statusChips.join("")}</div>
+    `;
   }
 
   renderTrickArea();
@@ -2358,14 +2400,34 @@ function render() {
   const isLocalTurn = Boolean(localPlayer && state.currentPlayer === localPlayer.id);
 
   if (isLocalTurn && selectedCombo) {
-    els.turnIndicator.textContent += ` 你当前选择：${comboToText(selectedCombo)}`;
+    els.turnIndicator.innerHTML += `
+      <div class="turn-hud-extra">
+        <span class="turn-hud-extra-label">当前选择</span>
+        <span class="turn-hud-extra-value">${escapeHtml(comboToText(selectedCombo))}</span>
+      </div>
+    `;
   } else if (isLocalTurn && state.selectedIds.size > 0) {
-    els.turnIndicator.innerHTML += ` <span class="message-error">当前选择不是合法牌型。${describeBeatRequirement(state.currentCombo)}</span>`;
+    els.turnIndicator.innerHTML += `
+      <div class="turn-hud-extra">
+        <span class="turn-hud-extra-label message-error">牌型非法</span>
+        <span class="turn-hud-extra-value">${escapeHtml(describeBeatRequirement(state.currentCombo))}</span>
+      </div>
+    `;
   } else if (isLocalTurn && humanPlayableContext.beatingCombos.length > 0) {
     const preview = humanPlayableContext.beatingCombos.slice(0, 3).map((combo) => comboToText(combo)).join(" / ");
-    els.turnIndicator.innerHTML += ` <span class="busy-note">可出候选：${preview}${humanPlayableContext.beatingCombos.length > 3 ? " ..." : ""}</span>`;
+    els.turnIndicator.innerHTML += `
+      <div class="turn-hud-extra">
+        <span class="turn-hud-extra-label">可出候选</span>
+        <span class="turn-hud-extra-value">${escapeHtml(preview)}${humanPlayableContext.beatingCombos.length > 3 ? " ..." : ""}</span>
+      </div>
+    `;
   } else if (isLocalTurn && state.currentCombo) {
-    els.turnIndicator.innerHTML += ` <span class="message-error">${describeBeatRequirement(state.currentCombo)}</span>`;
+    els.turnIndicator.innerHTML += `
+      <div class="turn-hud-extra">
+        <span class="turn-hud-extra-label message-error">当前无法压住</span>
+        <span class="turn-hud-extra-value">${escapeHtml(describeBeatRequirement(state.currentCombo))}</span>
+      </div>
+    `;
   }
   updateTopbarScoreboard();
   const latest = state.trickHistory[0];
@@ -3148,6 +3210,23 @@ function applySuggestedSelection() {
   render();
 }
 
+function applyMinimumBeatSelection() {
+  const player = getLocalSeatPlayer();
+  if (!player || state.currentPlayer !== player.id || player.finished || state.winnerTeam !== null || isOnlineActionLocked()) {
+    return;
+  }
+
+  const context = getHumanPlayableContext();
+  const combo = chooseSmallestPlayableCombo(context);
+  if (!combo) {
+    showErrorToast(state.currentCombo ? "当前没有可压住的组合。" : "当前没有合适的先手组合。");
+    return;
+  }
+
+  state.selectedIds = new Set(combo.cards.map((card) => card.id));
+  render();
+}
+
 function renderSeat(player) {
   const panel = els.panels[getDisplaySeatId(player.id)];
   panel.innerHTML = "";
@@ -3227,9 +3306,17 @@ function renderSeat(player) {
     suggestBtn.disabled = state.currentPlayer !== player.id || state.winnerTeam !== null || actionLocked;
     suggestBtn.addEventListener("click", applySuggestedSelection);
 
+    const minimumBtn = document.createElement("button");
+    minimumBtn.type = "button";
+    minimumBtn.id = "minimum-beat-btn";
+    minimumBtn.textContent = state.currentCombo ? "最小可压" : "最省出牌";
+    minimumBtn.disabled = state.currentPlayer !== player.id || state.winnerTeam !== null || actionLocked || humanPlayableContext.beatingCombos.length === 0;
+    minimumBtn.addEventListener("click", applyMinimumBeatSelection);
+
     actions.appendChild(playBtn);
     actions.appendChild(passBtn);
     actions.appendChild(suggestBtn);
+    actions.appendChild(minimumBtn);
 
     panel.appendChild(actions);
     panel.appendChild(hand);

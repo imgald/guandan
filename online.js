@@ -36,6 +36,7 @@
     chatUnreadBadge: document.getElementById("chat-unread-badge"),
     chatLog: document.getElementById("chat-log"),
     chatInput: document.getElementById("chat-input"),
+    mentionHostBtn: document.getElementById("mention-host-btn"),
     sendChatBtn: document.getElementById("send-chat-btn"),
     recentRoomList: document.getElementById("recent-room-list"),
     clearRecentRoomsBtn: document.getElementById("clear-recent-rooms-btn"),
@@ -235,6 +236,24 @@
     window.alert(message);
   }
 
+  function formatChatTime(createdAt) {
+    if (!createdAt) {
+      return "--:--";
+    }
+    return new Date(createdAt).toLocaleTimeString("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  function getLatestChatTimestamp(room = state.room) {
+    const timeline = [
+      ...((room?.chat || []).map((message) => message.createdAt || 0)),
+      ...((room?.systemEvents || []).map((event) => event.createdAt || 0)),
+    ];
+    return timeline.length ? Math.max(...timeline) : 0;
+  }
+
   function processSystemEvents(room, { silentInitial = false } = {}) {
     const events = room?.systemEvents || [];
     if (events.length === 0) {
@@ -248,15 +267,18 @@
       : (silentInitial ? [] : events.slice(-1));
     if (unseen.length > 0) {
       for (const event of unseen) {
-        notify(event.text);
+        if (event.type === "host-changed" && room?.hostId === state.playerId) {
+          notify("你已成为新的房主。");
+        } else {
+          notify(event.text);
+        }
       }
     }
     state.lastSystemEventId = events[events.length - 1].id;
   }
 
   function markChatAsRead(room = state.room) {
-    const latestCreatedAt = room?.chat?.length ? (room.chat[room.chat.length - 1].createdAt || 0) : 0;
-    state.lastSeenChatCreatedAt = latestCreatedAt;
+    state.lastSeenChatCreatedAt = getLatestChatTimestamp(room);
     state.unreadChatCount = 0;
   }
 
@@ -271,6 +293,9 @@
     if (els.chatUnreadBadge) {
       els.chatUnreadBadge.textContent = String(state.unreadChatCount);
       els.chatUnreadBadge.classList.toggle("hidden", state.unreadChatCount <= 0);
+    }
+    if (els.mentionHostBtn) {
+      els.mentionHostBtn.disabled = !showChat || !room;
     }
   }
 
@@ -301,6 +326,16 @@
     } catch {
       notify(`复制失败，请手动复制房间码：${code}`);
     }
+  }
+
+  function mentionHost() {
+    if (!state.room || !els.chatInput) {
+      return;
+    }
+    const hostName = state.room.players.find((player) => player.id === state.room.hostId)?.name || "房主";
+    const prefix = els.chatInput.value && !els.chatInput.value.endsWith(" ") ? " " : "";
+    els.chatInput.value = `${els.chatInput.value || ""}${prefix}@房主(${hostName}) `;
+    els.chatInput.focus();
   }
 
   function buildRoomRenderSignature(room) {
@@ -813,11 +848,24 @@
     }
     for (const message of timeline) {
       const row = document.createElement("div");
-      row.className = `chat-line ${message.kind === "system" ? "chat-line-system" : ""}`;
+      const selfClass = message.kind === "chat" && message.senderId === state.playerId ? " chat-line-self" : "";
+      row.className = `chat-line ${message.kind === "system" ? "chat-line-system" : ""}${selfClass}`;
       if (message.kind === "system") {
-        row.innerHTML = `<strong>系统消息</strong><span>${escapeHtml(message.text)}</span>`;
+        row.innerHTML = `
+          <div class="chat-line-head">
+            <strong>系统消息</strong>
+            <span class="chat-time">${escapeHtml(formatChatTime(message.createdAt))}</span>
+          </div>
+          <span>${escapeHtml(message.text)}</span>
+        `;
       } else {
-        row.innerHTML = `<strong>${escapeHtml(message.senderName)}</strong><span>${escapeHtml(message.text)}</span>`;
+        row.innerHTML = `
+          <div class="chat-line-head">
+            <strong>${escapeHtml(message.senderName)}</strong>
+            <span class="chat-time">${escapeHtml(formatChatTime(message.createdAt))}</span>
+          </div>
+          <span>${escapeHtml(message.text)}</span>
+        `;
       }
       els.chatLog.appendChild(row);
     }
@@ -839,7 +887,10 @@
     const interactionLocked = state.actionPending || state.syncingGame;
     els.startRoomBtn.disabled = !joined || interactionLocked;
     els.leaveRoomBtn.disabled = !joined || interactionLocked;
-    els.sendChatBtn.disabled = !joined || interactionLocked;
+    els.sendChatBtn.disabled = !joined || state.actionPending;
+    if (els.mentionHostBtn) {
+      els.mentionHostBtn.disabled = !joined;
+    }
     els.copyRoomCodeBtn.classList.toggle("hidden", !joined);
     els.roomLobbyOptions.classList.toggle("hidden", !joined || room?.status !== "lobby");
 
@@ -938,6 +989,9 @@
       els.chatLog.scrollTop = els.chatLog.scrollHeight;
     }
     updateChatChrome();
+  });
+  els.mentionHostBtn.addEventListener("click", () => {
+    mentionHost();
   });
 
   els.chatInput.addEventListener("keydown", (event) => {

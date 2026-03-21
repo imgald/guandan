@@ -183,6 +183,31 @@ function refreshPresence(room) {
   reassignHostIfNeeded(room);
 }
 
+function convertStartedPlayerToAi(room, player) {
+  if (!room || !player) {
+    return;
+  }
+  if (room.gameSetup?.seats) {
+    for (const seat of room.gameSetup.seats) {
+      if (seat.playerId === player.id) {
+        seat.playerId = null;
+        seat.isAi = true;
+        seat.name = `${player.name}的AI托管`;
+      }
+    }
+  }
+  if (room.gameState?.players) {
+    for (const seatPlayer of room.gameState.players) {
+      if (seatPlayer.ownerId === player.id) {
+        seatPlayer.ownerId = null;
+        seatPlayer.controlledByAi = true;
+        seatPlayer.name = `${player.name}的AI托管`;
+      }
+    }
+  }
+  room.actions = room.actions.filter((action) => action.playerId !== player.id);
+}
+
 function rememberActionKey(room, key) {
   room.recentActionKeys.push(key);
   room.recentActionKeys = room.recentActionKeys.slice(-80);
@@ -346,15 +371,25 @@ async function handleApi(req, res, pathname) {
   if (req.method === "POST" && action === "leave") {
     const player = ensurePlayer(room, body.playerId);
     if (room.status === "started") {
+      const leavingHost = room.hostId === player.id;
       room.players = room.players.filter((item) => item.id !== player.id);
       if (room.players.length === 0) {
         rooms.delete(room.id);
         sendJson(res, 200, { ok: true });
         return;
       }
+      if (leavingHost) {
+        convertStartedPlayerToAi(room, player);
+        reassignHostIfNeeded(room);
+        room.closedNotice = null;
+        addSystemEvent(room, "host-left", `${player.name} 已退出当前牌局，其座位改为 AI 托管，牌局继续。`);
+        room.updatedAt = Date.now();
+        sendJson(res, 200, { room: snapshotRoom(room) });
+        return;
+      }
       room.status = "closed";
       room.closedNotice = `${player.name} 已退出当前牌局，本局已结束。`;
-      addSystemEvent(room, "room-closed", `${player.name} \u5df2\u9000\u51fa\u5f53\u524d\u724c\u5c40\uff0c\u623f\u95f4\u5df2\u5173\u95ed\u3002`);
+      addSystemEvent(room, "room-closed", `${player.name} 已退出当前牌局，房间已关闭。`);
       room.gameState = null;
       room.gameSetup = null;
       room.actions = [];
