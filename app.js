@@ -845,7 +845,7 @@ function applyTribute(plan) {
     const movedReturn = removeOneCard(toPlayer, returnCard.id);
     fromPlayer.hand.push(movedReturn);
 
-    logs.push(`${fromPlayer.name} 杩涜础 ${cardsToText([movedTribute])} 缁?${toPlayer.name}锛?{toPlayer.name} 鍥炶础 ${cardsToText([movedReturn])}`);
+    logs.push(`${fromPlayer.name} 进贡 ${cardsToText([movedTribute])} 给 ${toPlayer.name}；${toPlayer.name} 回贡 ${cardsToText([movedReturn])} 给 ${fromPlayer.name}`);
     executedTransfers.push({
       from: fromPlayer.id,
       to: toPlayer.id,
@@ -891,14 +891,14 @@ function applyPlay(player, combo) {
     token: state.latestTrickToken,
   });
   state.trickHistory = state.trickHistory.slice(0, 4);
-  log(`${player.name} 鍑轰簡 ${comboToText(combo)}`);
+  log(`${player.name} 出了 ${comboToText(combo)}`);
   maybeFinishPlayer(player);
 }
 
 function applyPass(player) {
   state.consecutivePasses += 1;
   rememberPass(player, state.currentCombo);
-  log(`${player.name} passed`);
+  log(`${player.name} 选择不要。`);
 }
 
 function maybeResetTrickSafe() {
@@ -2336,10 +2336,10 @@ function render() {
 
   if (els.rulesContent) {
     els.rulesContent.innerHTML = `
-      <div class="rule-item"><strong>主牌升级：</strong>主牌从 3 开始，单下升一级，双下升两级。</div>
+      <div class="rule-item"><strong>主牌升级：</strong>主牌从 3 开始，单下升一级，双下升两级；打到 A 后再赢一局整场结束。</div>
       <div class="rule-item"><strong>主牌大小：</strong>大王 &gt; 小王 &gt; 本轮主牌 &gt; 2 &gt; A &gt; K ... &gt; 3。</div>
-      <div class="rule-item"><strong>逢人配：</strong>红桃主牌是逢人配，可替代除大小王外的任意点数参与组合。</div>
-      <div class="rule-item"><strong>顺子类限制：</strong>顺子、连对、钢板本体不能包含 2、王、主牌点数。</div>
+      <div class="rule-item"><strong>逢人配：</strong>红桃主牌是逢人配，可替代除大小王外的任意点数参与组合，AI 与联机同步共用这套判定。</div>
+      <div class="rule-item"><strong>顺子类限制：</strong>顺子、连对、钢板本体不能包含 2、王、主牌点数；红桃主牌只可作为逢人配补缺口。</div>
       <div class="rule-item"><strong>进贡：</strong>新一局开局前按上一局名次执行，前两名同队为双贡。</div>
       <div class="rule-item"><strong>抗贡：</strong>进贡方任一玩家若持有双大王，则本局取消全部进贡。</div>
     `;
@@ -2464,8 +2464,8 @@ function startNewGame() {
 
   state.currentPlayer = nextSetup ? nextSetup.startingPlayerId : Math.floor(Math.random() * 4);
   state.pendingRoundSetup = null;
-  log(`${state.players[state.currentPlayer].name} leads round ${state.roundNumber}.`);
-  log(`Trump rank: ${getLevelLabel(state.levelRank)}`);
+  log(`${state.players[state.currentPlayer].name} 先手开始第 ${state.roundNumber} 局。`);
+  log(`本局主牌：${getLevelLabel(state.levelRank)}`);
   log("Rules loaded: trump, wildcard, tribute, core combos, bombs and joker bomb.");
   render();
   maybeRunAiTurn();
@@ -2650,8 +2650,8 @@ function startOnlineRoundFromSetup(gameSetup, localPlayerOwnerId) {
   }
 
   state.currentPlayer = Math.floor(Math.random() * 4);
-  log(`${state.players[state.currentPlayer].name} leads round ${state.roundNumber}.`);
-  log(`Trump rank: ${getLevelLabel(state.levelRank)}`);
+  log(`${state.players[state.currentPlayer].name} 先手开始第 ${state.roundNumber} 局。`);
+  log(`本局主牌：${getLevelLabel(state.levelRank)}`);
   render();
   return exportOnlineSnapshot();
 }
@@ -2726,8 +2726,8 @@ function startNextOnlineRound() {
   applyTribute(state.pendingTribute);
   state.pendingTribute = null;
   state.currentPlayer = nextSetup ? nextSetup.startingPlayerId : Math.floor(Math.random() * 4);
-  log(`${state.players[state.currentPlayer].name} leads round ${state.roundNumber}.`);
-  log(`Trump rank: ${getLevelLabel(state.levelRank)}`);
+  log(`${state.players[state.currentPlayer].name} 先手开始第 ${state.roundNumber} 局。`);
+  log(`本局主牌：${getLevelLabel(state.levelRank)}`);
   render();
   return exportOnlineSnapshot();
 }
@@ -2843,7 +2843,23 @@ const debugApi = {
     state.levelRank = previousLevelRank;
     return combo;
   },
+  canBeatForLevel({ nextCards, currentCards, levelRank }) {
+    const previousLevelRank = state.levelRank;
+    state.levelRank = levelRank;
+    const nextCombo = analyzeCombo((nextCards || []).map((card) => ({ ...card })));
+    const currentCombo = currentCards ? analyzeCombo(currentCards.map((card) => ({ ...card }))) : null;
+    const result = canBeat(nextCombo, currentCombo);
+    state.levelRank = previousLevelRank;
+    return {
+      result,
+      nextCombo,
+      currentCombo,
+    };
+  },
   getMatchProgressAfterRound,
+  buildTributePlanForTest(roundResult) {
+    return buildTributePlan(JSON.parse(JSON.stringify(roundResult)));
+  },
   finalizeRoundResultForTest({ players, finishedOrder, levelRank = 3, matchScores = {} }) {
     state.players = players.map((player) => ({
       ...player,
@@ -2877,6 +2893,84 @@ const debugApi = {
       })),
       currentTributeInfo: state.currentTributeInfo ? JSON.parse(JSON.stringify(state.currentTributeInfo)) : null,
       logs: [...state.logs],
+    };
+  },
+  roundTripOnlineSnapshotForTest({
+    players,
+    currentPlayer = 0,
+    levelRank = 3,
+    latestTrickToken = 0,
+    roundNumber = 1,
+    pendingTribute = null,
+    currentTributeInfo = null,
+    pendingRoundSetup = null,
+    matchScores = {},
+    roundResult = null,
+    currentCombo = null,
+    lastPlayPlayer = null,
+    consecutivePasses = 0,
+    logs = [],
+    finishedOrder = [],
+    winnerTeam = null,
+    trickHistory = [],
+    playHistory = [],
+    passHistory = [],
+    localPlayerOwnerId = null,
+  }) {
+    state.onlineMode = true;
+    state.localPlayerOwnerId = localPlayerOwnerId || null;
+    state.lastOnlineSnapshotSignature = "";
+    state.players = players.map((player) => ({
+      ...player,
+      hand: (player.hand || []).map((card) => ({ ...card })),
+    }));
+    state.currentPlayer = currentPlayer;
+    state.levelRank = levelRank;
+    state.latestTrickToken = latestTrickToken;
+    state.roundNumber = roundNumber;
+    state.pendingTribute = pendingTribute ? JSON.parse(JSON.stringify(pendingTribute)) : null;
+    state.currentTributeInfo = currentTributeInfo ? JSON.parse(JSON.stringify(currentTributeInfo)) : null;
+    state.pendingRoundSetup = pendingRoundSetup ? JSON.parse(JSON.stringify(pendingRoundSetup)) : null;
+    state.matchScores = { ...matchScores };
+    state.roundResult = roundResult ? JSON.parse(JSON.stringify(roundResult)) : null;
+    state.currentCombo = currentCombo
+      ? {
+          ...currentCombo,
+          cards: currentCombo.cards.map((card) => ({ ...card })),
+        }
+      : null;
+    state.lastPlayPlayer = lastPlayPlayer;
+    state.consecutivePasses = consecutivePasses;
+    state.logs = [...logs];
+    state.finishedOrder = [...finishedOrder];
+    state.winnerTeam = winnerTeam;
+    state.trickHistory = trickHistory.map((item) => ({
+      ...item,
+      combo: item.combo ? { ...item.combo, cards: item.combo.cards.map((card) => ({ ...card })) } : null,
+    }));
+    state.playHistory = playHistory.map((item) => ({ ...item, ranks: [...(item.ranks || [])] }));
+    state.passHistory = passHistory.map((item) => ({ ...item }));
+    const snapshot = exportOnlineSnapshot();
+    state.lastOnlineSnapshotSignature = "";
+    importOnlineSnapshot(snapshot, localPlayerOwnerId);
+    return {
+      snapshot: JSON.parse(JSON.stringify(snapshot)),
+      restored: {
+        players: state.players.map((player) => ({
+          ...player,
+          hand: player.hand.map((card) => ({ ...card })),
+        })),
+        pendingTribute: state.pendingTribute ? JSON.parse(JSON.stringify(state.pendingTribute)) : null,
+        currentTributeInfo: state.currentTributeInfo ? JSON.parse(JSON.stringify(state.currentTributeInfo)) : null,
+        pendingRoundSetup: state.pendingRoundSetup ? JSON.parse(JSON.stringify(state.pendingRoundSetup)) : null,
+        roundResult: state.roundResult ? JSON.parse(JSON.stringify(state.roundResult)) : null,
+        playHistory: state.playHistory.map((item) => ({ ...item, ranks: [...(item.ranks || [])] })),
+        passHistory: state.passHistory.map((item) => ({ ...item })),
+        currentPlayer: state.currentPlayer,
+        levelRank: state.levelRank,
+        roundNumber: state.roundNumber,
+        localSeatId: state.localSeatId,
+      },
     };
   },
   buildEndgamePlanForTest(cards) {
