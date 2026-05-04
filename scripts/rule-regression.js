@@ -194,6 +194,31 @@ function main() {
   assert(doubleAntiTributeResult.currentTributeInfo && doubleAntiTributeResult.currentTributeInfo.resisted === true, "any double-tribute giver with double big jokers should resist the whole tribute");
   assert(doubleAntiTributeResult.currentTributeInfo.transfers.length === 0, "anti-tribute should cancel all double-tribute transfers");
 
+  const tributeChoice = debug.chooseTributeCardForTest({
+    levelRank: 7,
+    hand: [
+      c(7, "hearts", { id: "tribute-wild" }),
+      c(15, "spades", { id: "tribute-2" }),
+      c(12, "spades", { id: "bomb-a" }),
+      c(12, "hearts", { id: "bomb-b" }),
+      c(12, "clubs", { id: "bomb-c" }),
+      c(12, "diamonds", { id: "bomb-d" }),
+      c(9, "spades", { id: "safe-9" }),
+    ],
+  });
+  assert(tributeChoice && tributeChoice.id === "tribute-2", "tribute choice should avoid wildcard and bombs before sacrificing a strong singleton");
+
+  const returnChoice = debug.chooseReturnCardForTest({
+    levelRank: 7,
+    hand: [
+      c(3, "spades", { id: "ret-3" }),
+      c(4, "spades", { id: "ret-4" }),
+      c(9, "clubs", { id: "ret-9" }),
+      c(10, "clubs", { id: "ret-10" }),
+    ],
+  });
+  assert(returnChoice && returnChoice.id === "ret-3", "return tribute should prefer the least connective low card");
+
   const wildcardPair = debug.analyzeComboForLevel([c(7, "hearts", { id: "wild" }), c(9, "spades", { id: "natural" })], 7);
   assert(wildcardPair && wildcardPair.type === "pair" && wildcardPair.compareRank === 9, "wildcard pair recognition failed");
 
@@ -245,6 +270,22 @@ function main() {
     c(7, "hearts", { id: "d6wild" }),
   ], 7);
   assert(wildcardDoubleStraight && wildcardDoubleStraight.type === "doubleStraight" && wildcardDoubleStraight.compareRank === 6, "wildcard should complete a double straight without using the natural level card");
+
+  const wildcardGapCombos = debug.allPossibleCombosForTest({
+    levelRank: 9,
+    hand: [
+      c(3, "spades", { id: "g3" }),
+      c(4, "clubs", { id: "g4" }),
+      c(6, "diamonds", { id: "g6" }),
+      c(7, "spades", { id: "g7" }),
+      c(9, "hearts", { id: "gw" }),
+      c(12, "spades", { id: "high-q" }),
+    ],
+  });
+  assert(
+    wildcardGapCombos.some((combo) => combo.type === "straight" && combo.length === 5 && combo.cards.some((card) => card.id === "gw")),
+    "wildcard gap fill should be enumerated for sequence combos"
+  );
 
   const sameSizeBombBeat = debug.canBeatForLevel({
     levelRank: 7,

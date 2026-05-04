@@ -763,12 +763,62 @@ function getCardPowerForSort(card) {
   return getRankPower(card.rank) * 10 + (card.isJoker ? 2 : 0);
 }
 
+function getTributeStructurePenalty(card, player) {
+  if (!card || !player) {
+    return 0;
+  }
+  if (isWildcardCard(card)) {
+    return 10000;
+  }
+
+  const rankCards = player.hand.filter((item) => item.rank === card.rank);
+  if (rankCards.length >= 4) {
+    return 9000;
+  }
+  if (rankCards.length === 3) {
+    return 320;
+  }
+  if (rankCards.length === 2) {
+    return 180;
+  }
+
+  if (!isSequenceRank(card.rank)) {
+    return 0;
+  }
+
+  const sequenceNeighbors = [card.rank - 2, card.rank - 1, card.rank + 1, card.rank + 2]
+    .filter((rank) => isSequenceRank(rank))
+    .reduce((count, rank) => count + (player.hand.some((item) => item.rank === rank) ? 1 : 0), 0);
+
+  return sequenceNeighbors >= 3 ? 140 : sequenceNeighbors * 35;
+}
+
 function chooseTributeCard(player) {
-  return [...player.hand].sort((a, b) => getCardPowerForSort(b) - getCardPowerForSort(a))[0];
+  const scored = [...player.hand]
+    .map((card) => ({
+      card,
+      score: getCardPowerForSort(card) * 20 - getTributeStructurePenalty(card, player),
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  const safeChoice = scored.find((item) => item.score > 0);
+  return (safeChoice || scored[0] || {}).card || null;
 }
 
 function chooseReturnCard(player) {
-  return [...player.hand].sort((a, b) => getCardPowerForSort(a) - getCardPowerForSort(b))[0];
+  const scored = [...player.hand]
+    .map((card) => {
+      const power = getCardPowerForSort(card);
+      const structurePenalty = getTributeStructurePenalty(card, player);
+      const middleRankPenalty = isSequenceRank(card.rank) ? Math.max(0, 8 - Math.abs(8 - card.rank)) * 12 : 0;
+      return {
+        card,
+        score: power + structurePenalty + middleRankPenalty,
+      };
+    })
+    .sort((a, b) => a.score - b.score);
+
+  return (scored[0] || {}).card || null;
 }
 
 function removeOneCard(player, cardId) {
@@ -929,6 +979,33 @@ function maybeResetTrickSafe() {
   return true;
 }
 
+function pushWildcardSequenceCombos(combos, byRank, wildcards, groupSize, minGroups) {
+  if (!wildcards.length) {
+    return;
+  }
+
+  for (let startRank = 3; startRank <= 14; startRank += 1) {
+    let collectedCards = [];
+    let neededWildcards = 0;
+
+    for (let rank = startRank; rank <= 14; rank += 1) {
+      const naturalCards = byRank.get(rank) || [];
+      const takeCount = Math.min(groupSize, naturalCards.length);
+      collectedCards = [...collectedCards, ...naturalCards.slice(0, takeCount)];
+      neededWildcards += Math.max(0, groupSize - takeCount);
+
+      const groupCount = rank - startRank + 1;
+      if (neededWildcards > wildcards.length) {
+        break;
+      }
+
+      if (groupCount >= minGroups && neededWildcards > 0) {
+        combos.push(analyzeCombo([...collectedCards, ...wildcards.slice(0, neededWildcards)]));
+      }
+    }
+  }
+}
+
 function advanceTurn() {
   if (state.winnerTeam !== null) {
     render();
@@ -1029,6 +1106,7 @@ function allPossibleCombos(hand) {
       }
     }
   }
+  pushWildcardSequenceCombos(combos, byRank, wildcards, 1, 5);
 
   for (let start = 0; start < pairRanks.length; start += 1) {
     const seq = [];
@@ -1049,6 +1127,7 @@ function allPossibleCombos(hand) {
       }
     }
   }
+  pushWildcardSequenceCombos(combos, byRank, wildcards, 2, 3);
 
   for (let start = 0; start < tripleRanks.length; start += 1) {
     const seq = [];
@@ -1069,6 +1148,7 @@ function allPossibleCombos(hand) {
       }
     }
   }
+  pushWildcardSequenceCombos(combos, byRank, wildcards, 3, 2);
 
   return combos
     .filter(Boolean)
@@ -1221,7 +1301,7 @@ function buildEndgamePlan(hand, memo = new Map()) {
     return memo.get(key);
   }
 
-  if (hand.length > 8) {
+  if (hand.length > 12) {
     const combos = allPossibleCombos(hand);
     const preferred = combos.filter((combo) => combo.type !== "bomb" && combo.type !== "jokerBomb");
     const source = preferred.length > 0 ? preferred : combos;
@@ -1237,7 +1317,10 @@ function buildEndgamePlan(hand, memo = new Map()) {
     return fallback;
   }
 
-  const combos = allPossibleCombos(hand);
+  let combos = allPossibleCombos(hand);
+  if (hand.length > 8) {
+    combos = sortByEndgamePlan(combos, { hand }, combos, true).slice(0, 18);
+  }
   let bestPlan = null;
   for (const combo of combos) {
     const ids = new Set(combo.cards.map((card) => card.id));
@@ -1283,6 +1366,7 @@ function estimateTurnsForPlayer(player) {
 }
 
 function getDangerousOpponentInfo(player, nextPlayer = getNextUnfinishedPlayer(player.id)) {
+  const visibleCounts = getVisibleRemainingCounts(player);
   const opponentInfos = getOpponents(player)
     .filter((opponent) => opponent.hand.length <= 8)
     .map((opponent) => ({
@@ -1290,6 +1374,7 @@ function getDangerousOpponentInfo(player, nextPlayer = getNextUnfinishedPlayer(p
       turns: estimateTurnsForPlayer(opponent),
       handSize: opponent.hand.length,
       isNext: Boolean(nextPlayer && nextPlayer.id === opponent.id),
+      likelyBomb: [...visibleCounts.values()].some((remaining) => remaining >= 4) && opponent.hand.length >= 4,
     }));
 
   if (opponentInfos.length === 0) {
@@ -1299,6 +1384,9 @@ function getDangerousOpponentInfo(player, nextPlayer = getNextUnfinishedPlayer(p
   opponentInfos.sort((a, b) => {
     if (a.turns !== b.turns) {
       return a.turns - b.turns;
+    }
+    if (a.likelyBomb !== b.likelyBomb) {
+      return a.likelyBomb ? -1 : 1;
     }
     if (a.isNext !== b.isNext) {
       return a.isNext ? -1 : 1;
@@ -1434,6 +1522,9 @@ function shouldDefendAgainstOpponent(dangerInfo) {
     return true;
   }
   if (dangerInfo.isNext && dangerInfo.turns <= 2) {
+    return true;
+  }
+  if (dangerInfo.likelyBomb && dangerInfo.handSize <= 6) {
     return true;
   }
   return dangerInfo.handSize <= 4;
@@ -1588,7 +1679,7 @@ function chooseBombResponse(player, bombs, nonBombs, allCombos, urgentOpponent, 
 
   const twoHumanMode = isTwoHumanOnlineRoom();
   const dangerousOpponent = getOpponents(player).some((opponent) => opponent.hand.length <= 2);
-  const teammateCritical = Boolean(teammate && !teammate.finished && teammate.hand.length <= 2);
+  const teammateCritical = Boolean(teammate && !teammate.finished && estimateTurnsForPlayer(teammate) <= 1);
   const endgame = player.hand.length <= 6;
   const defensiveThreat = shouldDefendAgainstOpponent(dangerInfo);
 
@@ -1614,7 +1705,13 @@ function chooseBombResponse(player, bombs, nonBombs, allCombos, urgentOpponent, 
   if (defensiveThreat && dangerInfo?.isNext) {
     return turnsAfterBomb <= Math.max(1, dangerInfo.turns) ? bestBomb : null;
   }
-  if (urgentOpponent || endgame) {
+  if (teammateCritical && urgentTeammate && turnsAfterBomb <= 2) {
+    return bestBomb;
+  }
+  if (defensiveThreat && dangerInfo?.likelyBomb) {
+    return turnsAfterBomb <= Math.max(2, dangerInfo.turns) ? bestBomb : null;
+  }
+  if ((dangerInfo?.isNext && dangerInfo?.turns <= 2) || urgentOpponent || endgame) {
     return bestBomb;
   }
   return null;
@@ -1763,12 +1860,13 @@ function chooseLeadCombo(player, combos, urgentOpponent, urgentTeammate, nextPla
     return pairs[0] || triples[0] || preferredSingle || straights[0] || conservativeNonBombs[0] || combos[0];
   }
 
-  return planes[0]
-    || doubleStraights[0]
-    || straights[0]
-    || triplePairs[0]
-    || pairs[0]
+  return pairs[0]
+    || preferredSingle
     || triples[0]
+    || triplePairs[0]
+    || straights[0]
+    || doubleStraights[0]
+    || planes[0]
     || preferredSingle
     || conservativeNonBombs[0]
     || combos[0];
@@ -1785,7 +1883,7 @@ function chooseRecommendedMove(player) {
   const previousPlayer = getPreviousUnfinishedPlayer(player.id);
   const opponents = getOpponents(player);
   const urgentOpponent = opponents.some((opponent) => opponent.hand.length <= 3);
-  const urgentTeammate = teammate && !teammate.finished && teammate.hand.length <= 3;
+  const urgentTeammate = teammate && !teammate.finished && estimateTurnsForPlayer(teammate) <= 1;
   const twoHumanMode = isTwoHumanOnlineRoom();
   const dangerInfo = getDangerousOpponentInfo(player, nextPlayer);
   const defensiveOpponent = shouldDefendAgainstOpponent(dangerInfo);
@@ -2902,6 +3000,25 @@ const debugApi = {
         cards: combo.cards.map((card) => ({ ...card })),
       })),
     };
+  },
+  chooseTributeCardForTest({ hand, levelRank = 3 }) {
+    state.levelRank = levelRank;
+    return chooseTributeCard({
+      hand: hand.map((card) => ({ ...card })),
+    });
+  },
+  chooseReturnCardForTest({ hand, levelRank = 3 }) {
+    state.levelRank = levelRank;
+    return chooseReturnCard({
+      hand: hand.map((card) => ({ ...card })),
+    });
+  },
+  allPossibleCombosForTest({ hand, levelRank = 3 }) {
+    state.levelRank = levelRank;
+    return allPossibleCombos(hand.map((card) => ({ ...card }))).map((combo) => ({
+      ...combo,
+      cards: combo.cards.map((card) => ({ ...card })),
+    }));
   },
   chooseRecommendedMoveForTest({
     players,
