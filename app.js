@@ -1867,7 +1867,6 @@ function chooseLeadCombo(player, combos, urgentOpponent, urgentTeammate, nextPla
     || straights[0]
     || doubleStraights[0]
     || planes[0]
-    || preferredSingle
     || conservativeNonBombs[0]
     || combos[0];
 }
