@@ -1365,17 +1365,58 @@ function estimateTurnsForPlayer(player) {
   return buildEndgamePlan(player.hand).turns;
 }
 
+function getLikelyBombProfile(observerPlayer, targetPlayer, visibleCounts = getVisibleRemainingCounts(observerPlayer)) {
+  if (!observerPlayer || !targetPlayer || targetPlayer.hand.length < 4) {
+    return {
+      likelyBomb: false,
+      score: 0,
+      candidateRanks: [],
+    };
+  }
+
+  const candidateRanks = [];
+  let score = 0;
+  const handWeight = Math.max(0, targetPlayer.hand.length - 3) * 18;
+
+  for (let rank = 3; rank <= 17; rank += 1) {
+    const remaining = visibleCounts.get(rank) || 0;
+    if (remaining < 5) {
+      continue;
+    }
+
+    candidateRanks.push(rank);
+    score += 70 + handWeight;
+    score += (remaining - 5) * 40;
+    if (rank >= 15) {
+      score += 35;
+    } else if (rank >= 12) {
+      score += 18;
+    }
+  }
+
+  return {
+    likelyBomb: score >= 260,
+    score,
+    candidateRanks,
+  };
+}
+
 function getDangerousOpponentInfo(player, nextPlayer = getNextUnfinishedPlayer(player.id)) {
   const visibleCounts = getVisibleRemainingCounts(player);
   const opponentInfos = getOpponents(player)
     .filter((opponent) => opponent.hand.length <= 8)
-    .map((opponent) => ({
-      player: opponent,
-      turns: estimateTurnsForPlayer(opponent),
-      handSize: opponent.hand.length,
-      isNext: Boolean(nextPlayer && nextPlayer.id === opponent.id),
-      likelyBomb: [...visibleCounts.values()].some((remaining) => remaining >= 4) && opponent.hand.length >= 4,
-    }));
+    .map((opponent) => {
+      const bombProfile = getLikelyBombProfile(player, opponent, visibleCounts);
+      return {
+        player: opponent,
+        turns: estimateTurnsForPlayer(opponent),
+        handSize: opponent.hand.length,
+        isNext: Boolean(nextPlayer && nextPlayer.id === opponent.id),
+        likelyBomb: bombProfile.likelyBomb,
+        likelyBombScore: bombProfile.score,
+        candidateBombRanks: bombProfile.candidateRanks,
+      };
+    });
 
   if (opponentInfos.length === 0) {
     return null;
@@ -1385,8 +1426,8 @@ function getDangerousOpponentInfo(player, nextPlayer = getNextUnfinishedPlayer(p
     if (a.turns !== b.turns) {
       return a.turns - b.turns;
     }
-    if (a.likelyBomb !== b.likelyBomb) {
-      return a.likelyBomb ? -1 : 1;
+    if (a.likelyBombScore !== b.likelyBombScore) {
+      return b.likelyBombScore - a.likelyBombScore;
     }
     if (a.isNext !== b.isNext) {
       return a.isNext ? -1 : 1;
@@ -1525,6 +1566,9 @@ function shouldDefendAgainstOpponent(dangerInfo) {
     return true;
   }
   if (dangerInfo.likelyBomb && dangerInfo.handSize <= 6) {
+    return true;
+  }
+  if ((dangerInfo.likelyBombScore || 0) >= 320 && dangerInfo.handSize <= 8) {
     return true;
   }
   return dangerInfo.handSize <= 4;
@@ -1778,6 +1822,11 @@ function chooseDefensiveBeat(player, candidates, allCombos, dangerInfo) {
 
   const nonBombs = candidates.filter((combo) => combo.type !== "bomb" && combo.type !== "jokerBomb");
   const source = nonBombs.length > 0 ? nonBombs : candidates;
+  if (dangerInfo.likelyBomb && dangerInfo.isNext) {
+    const cautious = sortByConservativeUse(source, player.hand, allCombos);
+    const simple = cautious.filter((combo) => combo.type === "single" || combo.type === "pair" || combo.type === "triple");
+    return simple[0] || cautious[0] || null;
+  }
   const pressureChoices = sortByMemoryPressure(source, player, allCombos, dangerInfo.player, true);
   const structured = pressureChoices.filter((combo) => combo.type !== "single");
 
@@ -1790,6 +1839,53 @@ function chooseDefensiveBeat(player, candidates, allCombos, dangerInfo) {
   }
 
   return pressureChoices[0] || null;
+}
+
+function getLeadTypeBias(combo, player, nextPlayer, dangerInfo) {
+  const teammate = getTeammate(player);
+  const wildcardCount = player.hand.filter((card) => isWildcardCard(card)).length;
+  const highTrumpRound = state.levelRank >= 10;
+  const nextOpponent = Boolean(nextPlayer && nextPlayer.team !== player.team);
+  const teammateAhead = Boolean(nextPlayer && teammate && nextPlayer.id === teammate.id);
+  const likelyBombThreat = Boolean(dangerInfo?.likelyBomb && dangerInfo?.isNext);
+
+  let score = 0;
+  if (combo.type === "pair") score += 34;
+  if (combo.type === "single") score += 24;
+  if (combo.type === "triple") score += 18;
+  if (combo.type === "triplePair") score += 8;
+  if (combo.type === "straight") score -= highTrumpRound ? 22 : 8;
+  if (combo.type === "doubleStraight") score -= highTrumpRound ? 26 : 12;
+  if (combo.type === "plane") score -= highTrumpRound ? 30 : 16;
+
+  if (wildcardCount > 0 && combo.type !== "single" && combo.type !== "pair") {
+    score -= wildcardCount * 10;
+  }
+  if (teammateAhead && (combo.type === "single" || combo.type === "pair")) {
+    score += 20;
+  }
+  if (nextOpponent && likelyBombThreat && combo.type !== "single" && combo.type !== "pair") {
+    score -= 24;
+  }
+
+  return score;
+}
+
+function chooseDynamicOpeningLead(player, combos, nextPlayer, dangerInfo) {
+  const nonBombs = combos.filter((combo) => combo.type !== "bomb" && combo.type !== "jokerBomb");
+  const source = nonBombs.length > 0 ? nonBombs : combos;
+  return [...source]
+    .sort((a, b) => {
+      const scoreA = getLeadTypeBias(a, player, nextPlayer, dangerInfo) - getComboBreakPenalty(a, player.hand, combos);
+      const scoreB = getLeadTypeBias(b, player, nextPlayer, dangerInfo) - getComboBreakPenalty(b, player.hand, combos);
+      if (scoreA !== scoreB) {
+        return scoreB - scoreA;
+      }
+      if (a.cards.length !== b.cards.length) {
+        return a.cards.length - b.cards.length;
+      }
+      return getComboStrengthScore(a) - getComboStrengthScore(b);
+    })[0] || null;
 }
 
 function chooseLeadCombo(player, combos, urgentOpponent, urgentTeammate, nextPlayer, dangerInfo = null) {
@@ -1860,15 +1956,7 @@ function chooseLeadCombo(player, combos, urgentOpponent, urgentTeammate, nextPla
     return pairs[0] || triples[0] || preferredSingle || straights[0] || conservativeNonBombs[0] || combos[0];
   }
 
-  return pairs[0]
-    || preferredSingle
-    || triples[0]
-    || triplePairs[0]
-    || straights[0]
-    || doubleStraights[0]
-    || planes[0]
-    || conservativeNonBombs[0]
-    || combos[0];
+  return chooseDynamicOpeningLead(player, combos, nextPlayer, dangerInfo) || combos[0];
 }
 
 function chooseRecommendedMove(player) {
@@ -1950,6 +2038,13 @@ function chooseRecommendedMove(player) {
     const defensiveBeat = chooseDefensiveBeat(player, endgameNonBombs.length > 0 ? endgameNonBombs : nonBombs, combos, dangerInfo);
     if (defensiveBeat) {
       return defensiveBeat;
+    }
+  }
+
+  if (dangerInfo?.likelyBomb && opponentAfterMe && nonBombs.length > 0) {
+    const cautiousBeat = sortByConservativeUse(nonBombs, player.hand, combos)[0];
+    if (cautiousBeat && estimateTurnsAfterCombo(player, cautiousBeat) <= Math.max(2, dangerInfo.turns + 1)) {
+      return cautiousBeat;
     }
   }
 
@@ -3018,6 +3113,19 @@ const debugApi = {
       ...combo,
       cards: combo.cards.map((card) => ({ ...card })),
     }));
+  },
+  getDangerousOpponentInfoForTest({ players, currentPlayer, levelRank = 3, playHistory = [], passHistory = [] }) {
+    state.players = players.map((player) => ({
+      ...player,
+      hand: (player.hand || []).map((card) => ({ ...card })),
+    }));
+    state.currentPlayer = currentPlayer;
+    state.levelRank = levelRank;
+    state.playHistory = playHistory.map((item) => ({ ...item, ranks: [...(item.ranks || [])] }));
+    state.passHistory = passHistory.map((item) => ({ ...item }));
+    const player = state.players[currentPlayer];
+    const info = getDangerousOpponentInfo(player, getNextUnfinishedPlayer(player.id));
+    return info ? { ...info, player: { ...info.player } } : null;
   },
   chooseRecommendedMoveForTest({
     players,

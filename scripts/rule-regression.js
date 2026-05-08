@@ -287,6 +287,72 @@ function main() {
     "wildcard gap fill should be enumerated for sequence combos"
   );
 
+  const likelyBombInfo = debug.getDangerousOpponentInfoForTest({
+    levelRank: 3,
+    currentPlayer: 0,
+    players: [
+      {
+        id: 0,
+        name: "AI",
+        team: 0,
+        finished: false,
+        hand: [c(3, "spades", { id: "lb-3" }), c(4, "spades", { id: "lb-4" }), c(5, "spades", { id: "lb-5" })],
+      },
+      {
+        id: 1,
+        name: "BombThreat",
+        team: 1,
+        finished: false,
+        hand: [c(8), c(9), c(10), c(11), c(12), c(13)],
+      },
+      {
+        id: 2,
+        name: "Mate",
+        team: 0,
+        finished: false,
+        hand: [c(6), c(6, "clubs", { id: "mate-6b" })],
+      },
+      {
+        id: 3,
+        name: "OtherOpp",
+        team: 1,
+        finished: false,
+        hand: [c(14), c(15), c(16, "joker", { id: "other-j" })],
+      },
+    ],
+    playHistory: [],
+    passHistory: [],
+  });
+  assert(likelyBombInfo && likelyBombInfo.player.id === 1, "dangerous opponent selection should keep the bigger likely-bomb threat in view");
+  assert((likelyBombInfo.likelyBombScore || 0) > 0, "likely-bomb heuristic should expose a non-zero score when untouched ranks remain");
+
+  const dynamicLead = debug.chooseRecommendedMoveForTest({
+    levelRank: 12,
+    currentPlayer: 0,
+    currentCombo: null,
+    players: [
+      {
+        id: 0,
+        name: "AI",
+        team: 0,
+        finished: false,
+        hand: [
+          c(5, "spades", { id: "lead-5a" }),
+          c(5, "clubs", { id: "lead-5b" }),
+          c(8, "spades", { id: "lead-8" }),
+          c(9, "spades", { id: "lead-9" }),
+          c(10, "spades", { id: "lead-10" }),
+          c(11, "spades", { id: "lead-j" }),
+          c(12, "spades", { id: "lead-q" }),
+        ],
+      },
+      { id: 1, name: "Opp", team: 1, finished: false, hand: [c(3), c(4), c(6), c(7)] },
+      { id: 2, name: "Mate", team: 0, finished: false, hand: [c(6, "clubs", { id: "mate-a" }), c(7, "clubs", { id: "mate-b" })] },
+      { id: 3, name: "Opp2", team: 1, finished: false, hand: [c(13), c(14)] },
+    ],
+  });
+  assert(dynamicLead && dynamicLead.type === "pair", "dynamic opening should preserve long high-rank structure and prefer a low pair lead");
+
   const sameSizeBombBeat = debug.canBeatForLevel({
     levelRank: 7,
     nextCards: [c(9, "spades"), c(9, "hearts"), c(9, "clubs"), c(9, "diamonds")],
